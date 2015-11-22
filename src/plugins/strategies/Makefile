@@ -9,13 +9,15 @@ SRCS=angel.c \
      libvertex.c \
      nm.c \
      pro.c \
-     random.c
+     random.c \
+     bandit.c
 
 LIBEXEC_TGTS=angel.so \
              exhaustive.so \
              nm.so \
              pro.so \
-             random.so
+             random.so \
+             bandit.so
 
 angel.so: REQ_LDLIBS+=-lm
 angel.so: libvertex.o
@@ -31,6 +33,8 @@ pro.so: libvertex.o
 
 random.so: REQ_LDLIBS+=-lm
 random.so: libvertex.o
+
+bandit.so: override LDLIBS+=-lm
 
 # Active Harmony makefiles should always include this file last.
 include $(TO_BASE)/make/common.mk
