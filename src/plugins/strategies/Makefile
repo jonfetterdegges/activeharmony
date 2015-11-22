@@ -16,7 +16,8 @@ LIBEXEC_SRCS=libvertex.c \
              random.c \
              nm.c \
              pro.c \
-             nemo.c
+             nemo.c \
+	     bandit.c
 
 SRCS=$(LIBEXEC_SRCS)
 
@@ -24,7 +25,8 @@ LIBEXEC_TARGETS=exhaustive.so \
                 random.so \
                 nm.so \
                 pro.so \
-                nemo.so
+                nemo.so \
+		bandit.so
 
 TARGETS=$(LIBEXEC_TARGETS)
 
@@ -56,6 +58,8 @@ pro.so: libvertex.o
 
 nemo.so: override LDLIBS+=-lm
 nemo.so: libvertex.o
+
+bandit.so: override LDLIBS+=-lm
 
 %.so: %.o
 	$(CC) -shared $(LDFLAGS) $(CFLAGS) $^ $(LOADLIBES) $(LDLIBS) -o $@
