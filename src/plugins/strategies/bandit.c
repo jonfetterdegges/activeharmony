@@ -33,7 +33,6 @@ typedef struct strategy {
   strategy_best_t best;
   hook_init_t init;
   hook_join_t join;
-  hook_getcfg_t getcfg;
   hook_setcfg_t setcfg;
   hook_fini_t fini;
 } strategy_t;
@@ -105,31 +104,21 @@ int strategy_init(hsignature_t *sig) {
   best_perf = INFINITY;
 
   // Load constants for sliding window and tradeoff constant
-  const char *window_str = session_getcfg(WINDOW_SIZE_PARAM);
-  if (!window_str)
-    window_size = DEFAULT_WINDOW_SIZE;
-  else {
-    window_size = atoi(window_str);
-    if (window_size <= 0) {
-      session_error("Invalid " WINDOW_SIZE_PARAM);
-      return -1;
-    }
+  window_size = hcfg_int(session_cfg, WINDOW_SIZE_PARAM);
+  if (window_size <= 0) {
+    session_error("Invalid " WINDOW_SIZE_PARAM);
+    return -1;
   }
 
-  const char *tradeoff_str = session_getcfg(TRADEOFF_PARAM);
-  if (!tradeoff_str)
-    tradeoff = DEFAULT_TRADEOFF;
-  else {
-    tradeoff = atof(tradeoff_str);
-    if (tradeoff <= 0.0) {
-      session_error("Invalid " TRADEOFF_PARAM);
-      return -1;
-    }
+  tradeoff = hcfg_real(session_cfg, TRADEOFF_PARAM);
+  if (tradeoff <= 0.0) {
+    session_error("Invalid " TRADEOFF_PARAM);
+    return -1;
   }
   explore_factor = tradeoff * sqrt(2.0 * log2((double) window_size));
   
   // Load the sub-strategies and run their init's in order
-  const char *strats = session_getcfg(STRATEGIES_PARAM);
+  const char *strats = hcfg_get(session_cfg, STRATEGIES_PARAM);
   if (!strats) {
     session_error("No strategy list provided in " STRATEGIES_PARAM);
     return -1;
@@ -246,7 +235,7 @@ int parse_strategies(const char *list) {
     strncpy(name, list, end - list);
     name[end-list] = '\0';
 
-    prefix = session_getcfg(CFGKEY_HARMONY_HOME);
+    prefix = hcfg_get(session_cfg, CFGKEY_HARMONY_HOME);
     if (snprintf_grow(&path, &path_len, "%s/libexec/%.*s",
 		      prefix, end - list, list) < 0)
       {
@@ -284,7 +273,6 @@ int parse_strategies(const char *list) {
 
     strat->init     =         (hook_init_t) dlfptr(lib, "strategy_init");
     strat->join     =         (hook_join_t) dlfptr(lib, "strategy_join");
-    strat->getcfg   =       (hook_getcfg_t) dlfptr(lib, "strategy_getcfg");
     strat->setcfg   =       (hook_setcfg_t) dlfptr(lib, "strategy_setcfg");
     strat->fini     =         (hook_fini_t) dlfptr(lib, "strategy_fini");
 
@@ -344,7 +332,7 @@ void free_strategies(void) {
   free(strategies);
 }
 
-// Nothing special to be done for join, getcfg, setcfg; we just pass the
+// Nothing special to be done for join, setcfg; we just pass the
 // call to the sub-strategies.
 // TODO can I use setcfg to catch a sub-strategy setting the "converged"
 // flag?
@@ -360,17 +348,6 @@ int strategy_join(const char *id) {
   return retval;
 }
 
-int strategy_getcfg(const char *key) {
-  int i;
-  int retval = 0;
-
-  for (i = 0; i < strat_count; i++) {
-    if (strategies[i].getcfg)
-      retval |= (strategies[i].getcfg)(key);
-  }
-  return retval;
-}
-
 int strategy_setcfg(const char *key, const char *val) {
   int i;
   int retval = 0;
@@ -382,7 +359,7 @@ int strategy_setcfg(const char *key, const char *val) {
   // after, rather than doing it here?)
 
   for (i = 0; i < strat_count; i++) {
-    if (strategies[i].getcfg)
+    if (strategies[i].setcfg)
       retval |= (strategies[i].setcfg)(key, val);
   }
   return retval;
