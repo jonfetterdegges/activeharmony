@@ -250,12 +250,12 @@ int strategy_analyze(htrial_t* trial)
         }
     }
 
-    if (trial->point.id == final_id) {
-        if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
-            session_error("Internal error: Could not set convergence status.");
-            return -1;
-        }
-    }
+//    if (trial->point.id == final_id) {
+//        if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
+//            session_error("Internal error: Could not set convergence status.");
+//            return -1;
+//        }
+//    }
 
     /* decrement the number of points we're waiting for
        when we get a point back that was generated before
