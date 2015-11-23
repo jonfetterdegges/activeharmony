@@ -11,6 +11,13 @@
  * BANDIT_TRADEOFF    | Double     | 1.0     | Tradeoff between exploration and exploitation; higher means switch strategies more often
  */
 
+#define DEBUG 1
+#ifdef DEBUG
+#define dbg(x...) fprintf(stderr, x)
+#else
+#define dbg(x...)
+#endif
+
 #include "strategy.h"
 #include "session-core.h"
 #include "hperf.h"
@@ -53,8 +60,16 @@ double *best_perf_per_strategy = NULL;
 #define WINDOW_SIZE_PARAM "BANDIT_WINDOW_SIZE"
 #define TRADEOFF_PARAM    "BANDIT_TRADEOFF"
 
-#define DEFAULT_WINDOW_SIZE 32
-#define DEFAULT_TRADEOFF 1.0
+hcfg_info_t plugin_keyinfo[] = {
+    { STRATEGIES_PARAM, NULL,
+      "Colon-separated list of strategies to invoke." },
+    { WINDOW_SIZE_PARAM, "32",
+      "Number of results to keep in the sliding window." },
+    { TRADEOFF_PARAM, "1.0",
+      "Tradeoff between exploration and exploitation; "
+      "higher means switch strategies more often." },
+    { NULL }
+};
 
 // have to keep MAX_NUM_STRATEGIES in sync with POINT_ID_MASK and POINT_ID_BITS;
 // the strategy ID fits in the remaining bits (with a zero sign bit)
@@ -85,9 +100,6 @@ int window_population;
 int window_next;
 int requests_outstanding;  // number of generate calls not yet analyzed
 
-// the maximum number of generates we are willing to issue before an analyze
-#define MAX_REQUESTS_OUTSTANDING (DEFAULT_WINDOW_SIZE / 4)
-
 // internal function declarations
 int init_sliding_window(void);
 void free_strategies(void);
@@ -99,6 +111,8 @@ int assign_scores(double *scores);
 
 int strategy_init(hsignature_t *sig) {
   int retval;
+
+  fprintf(stderr, "Starting init\n");
 
   best = HPOINT_INITIALIZER;
   best_perf = INFINITY;
@@ -125,12 +139,14 @@ int strategy_init(hsignature_t *sig) {
   }
 
   retval = parse_strategies(strats);
+  fprintf(stderr, "Finished parsing strategies.\n");
   if (retval < 0) {
     session_error(errmsg 
 		  ? errmsg 
 		  : "Error parsing strategy list (allocation filed?)");
     return -1;
   }
+  dbg("strat_count is %d\n", strat_count);
   if (strat_count > MAX_NUM_STRATEGIES) {
     session_error("Too many strategies specified.");
     free_strategies();
@@ -152,6 +168,7 @@ int strategy_init(hsignature_t *sig) {
   // every restart---unless we want to allow window size and tradeoff
   // to change on restart?
 
+  fprintf(stderr, "Initializing sliding window.\n");
   if (init_sliding_window() < 0) {
     free_strategies();
     free(best_per_strategy);
@@ -161,12 +178,18 @@ int strategy_init(hsignature_t *sig) {
 
   int i;
   for (i = 0; i < strat_count; i++) {
+    fprintf(stderr, "Initializing strategy %d.\n", i);
     hook_init_t init = strategies[i].init;
     if (init) {
+      fprintf(stderr, " running strategy_init\n");
       retval = (strategies[i].init)(sig);
-      if (retval < 0)
+      fprintf(stderr, " returned %d\n", retval);
+      if (retval < 0) {
 	// sub-strategy should have called session_error
 	return retval;
+      }
+    } else {
+      dbg("strategy %d, no init\n", i);
     }
   }
 
@@ -216,6 +239,8 @@ int parse_strategies(const char *list) {
   name = NULL;
   path_len = 0;
   retval = 0;
+  strat_count = 0;
+  strat_cap = 0;
   while (list && *list) {
     if (strat_count == strat_cap) {
       if (array_grow(&strategies, &strat_cap, sizeof(strategy_t)) < 0) {
@@ -244,17 +269,18 @@ int parse_strategies(const char *list) {
       }
 
     lib = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
-    if (!lib) {
+    if (lib == NULL) {
       errmsg = dlerror();
       retval = -1;
       goto cleanup;
     }
 
-    strat->name = name;
+    strat = strategies + strat_count;
+
+    strat->name = stralloc(name);
     strat->lib = lib;
 
     // load function pointers into the data structure
-    strat = strategies + strat_count;
     strat->generate = (strategy_generate_t) dlfptr(lib, "strategy_generate");
     strat->rejected = (strategy_rejected_t) dlfptr(lib, "strategy_rejected");
     strat->analyze  =  (strategy_analyze_t) dlfptr(lib, "strategy_analyze");
@@ -275,6 +301,14 @@ int parse_strategies(const char *list) {
     strat->join     =         (hook_join_t) dlfptr(lib, "strategy_join");
     strat->setcfg   =       (hook_setcfg_t) dlfptr(lib, "strategy_setcfg");
     strat->fini     =         (hook_fini_t) dlfptr(lib, "strategy_fini");
+
+    hcfg_info_t *keyinfo = dlsym(lib, "plugin_keyinfo");
+    if (keyinfo) {
+      if (hcfg_reginfo((hcfg_t *) session_cfg, keyinfo) != 0) {
+        errmsg = "Error registering strategy configuration keys.";
+        return -1;
+      }
+    }
 
     name = NULL; // to avoid freeing it in cleanup
     lib = NULL;  // avoid closing in cleanup
@@ -373,14 +407,23 @@ int strategy_setcfg(const char *key, const char *val) {
 int strategy_generate(hflow_t *flow, hpoint_t *point) {
   double scores[MAX_NUM_STRATEGIES];
 
+#ifdef DEBUG
+  int buflen = 100;
+  char *buf = (char *) malloc(buflen*sizeof(char));
+  char *bbuf = buf;
+#endif
+
   // don't let the generates get too far ahead of the analyses; otherwise
   // we might wind up chasing down a strategy that is doing poorly
-  if (requests_outstanding > MAX_REQUESTS_OUTSTANDING) {
+  // TODO make max requests outstanding a parameter?
+  if (requests_outstanding > (window_size / 4)) {
     flow->status = HFLOW_WAIT;
     return 0;
   }
 
+  dbg("Entering assign_scores\n");
   int best_strategy = assign_scores(scores);
+  dbg("best_strategy is %d\n", best_strategy);
   if (best_strategy < 0) {
     // session_error set below
     return -1;
@@ -390,10 +433,12 @@ int strategy_generate(hflow_t *flow, hpoint_t *point) {
   // we'll go to the second best, and so forth.
   // I assume strategies won't pay attention to the "point" field in flow.
   do {
+    dbg("calling strategy %d generate\n", best_strategy);
     int result = strategies[best_strategy].generate(flow, point);
     if (result < 0)
       return -1;
     if (flow->status == HFLOW_WAIT) {
+      dbg("strategy %d wants to wait\n", best_strategy);
       // find the next best strategy
       scores[best_strategy] = -1.0;
       best_strategy = -1;
@@ -404,7 +449,14 @@ int strategy_generate(hflow_t *flow, hpoint_t *point) {
 	  best_score = scores[i];
 	  best_strategy = i;
 	}
+      dbg("new best strategy is %d\n", best_strategy);
     }
+    #ifdef DEBUG
+      buf = bbuf;
+      if (hpoint_serialize(&buf, &buflen, point) < 0)
+        return -1;
+      dbg("strategy %d generated %s\n", best_strategy, bbuf);
+    #endif
   } while (best_strategy >= 0 && flow->status == HFLOW_WAIT);
 
   if (best_strategy < 0)
@@ -434,6 +486,9 @@ int strategy_generate(hflow_t *flow, hpoint_t *point) {
     window_population++;
 
   requests_outstanding++;
+#ifdef DEBUG
+  free(bbuf);
+#endif
   return 0;
 }
 
@@ -470,11 +525,16 @@ int assign_scores(double *scores) {
     } else {
       double nuses = (double) usage_counts[istrat];
       double nresults = (double) result_counts[istrat];
+      if (nresults == 0.0)
+        nresults = 1.0;  // auc will be zero so the exploitation score is 0 anyway
       scores[istrat] = 2.0 * auc[istrat] / nresults / (nresults + 1.0);
       scores[istrat] += explore_factor / sqrt(nuses);
     }
-    if (scores[istrat] > best_score)
+    dbg("Strategy %d: score %.3lf\n", istrat, scores[istrat]);
+    if (scores[istrat] > best_score) {
       best_strategy = istrat;
+      best_score = scores[istrat];
+    }
   }
   return best_strategy;
 }
@@ -498,6 +558,14 @@ int strategy_rejected(hflow_t *flow, hpoint_t *point) {
 }
 
 int strategy_analyze(htrial_t *trial) {
+  int strategy_id, sub_point_id;
+  sub_point_id = translate_id_to_sub(trial->point.id, &strategy_id);
+  if (strategy_id < 0 || strategy_id >= MAX_NUM_STRATEGIES) {
+    session_error("Invalid strategy ID in strategy_analyze.");
+    return -1;
+  }
+  dbg("analyze: strategy id %d, sub point id %d\n", strategy_id, sub_point_id);
+  
   // find the relevant subtrial
   // for now I'm being dumb about searching the window, because it's small
   int window_entry;
@@ -505,9 +573,11 @@ int strategy_analyze(htrial_t *trial) {
     if (window[window_entry].point_id == trial->point.id)
       break;
   }
-  if (window_entry == window_size)
+  if (window_entry == window_size) {
+    dbg("didn't find subtrial, returning\n");
     // i'm not responsible for this
     return 0;
+  }
 
   // indicate that this point is complete
   window[window_entry].complete = 1;
@@ -519,6 +589,7 @@ int strategy_analyze(htrial_t *trial) {
       session_error("failed to copy new global optimum");
       return -1;
     }
+    dbg("new global best\n");
     best_perf = hperf_unify(trial->perf);
     window[window_entry].new_best = 1;
   }
@@ -533,18 +604,11 @@ int strategy_analyze(htrial_t *trial) {
   // identical, so a new strategy can just define strategy_hint to call
   // strategy_analyze if it doesn't need to match with a point it's found.
 
-  int strategy_id, sub_point_id;
-  sub_point_id = translate_id_to_sub(trial->point.id, &strategy_id);
-  if (strategy_id < 0 || strategy_id >= MAX_NUM_STRATEGIES) {
-    session_error("Invalid strategy ID in strategy_analyze.");
-    return -1;
-  }
-  
   // call "analyze" for originating strategy
   // have to bend over backwards to respect "const" qualifier on trial->point
   // while still giving the substrategy the id it expects
-  htrial_t trial_clone;
-  hpoint_t point_clone;
+  htrial_t trial_clone = {HPOINT_INITIALIZER, NULL};
+  hpoint_t point_clone = HPOINT_INITIALIZER;
   if (hpoint_copy(&point_clone, &trial->point) < 0) {
     session_error("Failed to copy point for substrategy");
     return -1;
@@ -555,17 +619,20 @@ int strategy_analyze(htrial_t *trial) {
     return -1;
   }
   trial_clone.perf = trial->perf;  // pointer copy; any reason to clone?
+  dbg("calling strategy %d analyze\n", strategy_id);
   int result = strategies[strategy_id].analyze(&trial_clone);
   if (result < 0)
     return -1;
 
   // call "hint" for all others
   int i;
-  for (i = 0; i < strat_count; i++)
-    if (i != strategy_id) {
+  for (i = 0; i < strat_count; i++) {
+    if (i != strategy_id && strategies[i].hint) {
+      dbg("hinting strategy %d\n", i);
       if (strategies[i].hint(trial) < 0)
 	return -1;
     }
+  }
 
   return 0;
 }
