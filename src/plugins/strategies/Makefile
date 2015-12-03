@@ -13,7 +13,9 @@ SRCS=angel.c \
      bandit.c \
      breadth_first.c \
      beam.c \
-     queues.c
+     queues.c \
+     libgridpoint.c \
+     sim_anneal.c
 
 LIBEXEC_TGTS=angel.so \
              exhaustive.so \
@@ -22,7 +24,8 @@ LIBEXEC_TGTS=angel.so \
              random.so \
              bandit.so \
              beam.so \
-             breadth_first.so
+             breadth_first.so \
+             sim_anneal.so
 
 angel.so: REQ_LDLIBS+=-lm
 angel.so: libvertex.o
@@ -45,7 +48,10 @@ breadth_first.so: libvertex.o queues.o
 beam.so: REQ_LDLIBS+=-lm
 beam.so: libvertex.o queues.o
 
-bandit.so: override LDLIBS+=-lm
+bandit.so: REQ_LDLIBS+=-lm
+
+sim_anneal.so: REQ_LDLIBS+=-lm
+sim_anneal.so: libgridpoint.o
 
 # Active Harmony makefiles should always include this file last.
 include $(TO_BASE)/make/common.mk

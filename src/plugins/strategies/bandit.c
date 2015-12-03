@@ -112,7 +112,7 @@ int assign_scores(double *scores);
 int strategy_init(hsignature_t *sig) {
   int retval;
 
-  fprintf(stderr, "Starting init\n");
+  dbg("Starting init\n");
 
   best = HPOINT_INITIALIZER;
   best_perf = INFINITY;
@@ -139,7 +139,7 @@ int strategy_init(hsignature_t *sig) {
   }
 
   retval = parse_strategies(strats);
-  fprintf(stderr, "Finished parsing strategies.\n");
+  dbg("Finished parsing strategies.\n");
   if (retval < 0) {
     session_error(errmsg 
 		  ? errmsg 
@@ -168,7 +168,7 @@ int strategy_init(hsignature_t *sig) {
   // every restart---unless we want to allow window size and tradeoff
   // to change on restart?
 
-  fprintf(stderr, "Initializing sliding window.\n");
+  dbg("Initializing sliding window.\n");
   if (init_sliding_window() < 0) {
     free_strategies();
     free(best_per_strategy);
@@ -178,12 +178,12 @@ int strategy_init(hsignature_t *sig) {
 
   int i;
   for (i = 0; i < strat_count; i++) {
-    fprintf(stderr, "Initializing strategy %d.\n", i);
+    dbg("Initializing strategy %d.\n", i);
     hook_init_t init = strategies[i].init;
     if (init) {
-      fprintf(stderr, " running strategy_init\n");
+      dbg(" running strategy_init\n");
       retval = (strategies[i].init)(sig);
-      fprintf(stderr, " returned %d\n", retval);
+      dbg(" returned %d\n", retval);
       if (retval < 0) {
 	// sub-strategy should have called session_error
 	return retval;
