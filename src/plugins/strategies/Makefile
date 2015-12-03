@@ -12,6 +12,7 @@ SRCS=angel.c \
      random.c \
      bandit.c \
      breadth_first.c \
+     beam.c \
      queues.c
 
 LIBEXEC_TGTS=angel.so \
@@ -20,6 +21,7 @@ LIBEXEC_TGTS=angel.so \
              pro.so \
              random.so \
              bandit.so \
+             beam.so \
              breadth_first.so
 
 angel.so: REQ_LDLIBS+=-lm
@@ -39,6 +41,9 @@ random.so: libvertex.o
 
 breadth_first.so: REQ_LDLIBS+=-lm
 breadth_first.so: libvertex.o queues.o
+
+beam.so: REQ_LDLIBS+=-lm
+beam.so: libvertex.o queues.o
 
 bandit.so: override LDLIBS+=-lm
 

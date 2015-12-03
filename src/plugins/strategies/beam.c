@@ -42,6 +42,10 @@
 #include <errno.h>
 #include <math.h>
 
+
+#define _width_ 5
+#define _depth_ 17
+
 /*
  * Configuration variables used in this plugin.
  * These will automatically be registered by session-core upon load.
@@ -67,7 +71,7 @@ double   best_perf;
 /* Forward function definitions. */
 int strategy_cfg(hsignature_t* sig);
 int get_next_point(void);
-int generate_all_successors(void);
+int generate_all_successors(pqueue_node_t *);
 
 /* Variables to track current search state. */
 int N;
@@ -76,12 +80,15 @@ hrange_t* range;
 curr_n_t curr;
 
 int remaining_passes = 1;
-int final_id = 0;
-int outstanding_points = 0, final_point_received = 0;
+int outstanding_points = 0;
 int global_point_id = 0;
 
 queue_node_t* queue_head = NULL;
+pqueue_node_t* priority_queue_head = NULL;
 visited_node_t *vqueue_head = NULL;
+queue_node_t* idx_head = NULL;
+
+unsigned long *tmp_idx;
 
 void print_curr(void){
   fprintf(stderr, "Point #%d: (", curr.point.id);
@@ -117,7 +124,8 @@ int strategy_init(hsignature_t* sig)
 		}
 
 		curr.idx = malloc(N * sizeof(unsigned long));
-		if (!curr.idx) {
+    tmp_idx = malloc(N * sizeof(unsigned long));
+		if (!curr.idx || !tmp_idx) {
 			session_error("Could not allocate memory for index array.");
 			return -1;
 		}
@@ -132,6 +140,8 @@ int strategy_init(hsignature_t* sig)
 		global_point_id = 1;
 
 		queue_head = NULL;
+		priority_queue_head = NULL;
+		vqueue_head = NULL;
 	}
 
 	/* Initialization for subsequent calls to strategy_init(). */
@@ -218,16 +228,28 @@ int strategy_cfg(hsignature_t* sig)
 int strategy_generate(hflow_t* flow, hpoint_t* point)
 {
 	if (remaining_passes > 0) {
+    int rc = get_next_point();
 
-    if (get_next_point() < 0){
+    if (rc < 0){
       return -1;
+    }else if(rc == 2){
+      flow->status = HFLOW_WAIT;
+      return 0;
+    }else if(rc == 1){
+      if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
+        session_error("Internal error: Could not set convergence status.");
+        return -1;
+      }
+      flow->status = HFLOW_WAIT;
+      return 0;
     }
 
 		if (hpoint_copy(point, &curr.point) != 0) {
 			session_error("Could not copy current point during generation.");
 			return -1;
 		}
-
+    idx_head = queue_push_back(idx_head, &curr.point, curr.idx, N);
+    // print_curr();
 	}else {
 		if (hpoint_copy(point, &best) != 0) {
 			session_error("Could not copy best point during generation.");
@@ -238,8 +260,7 @@ int strategy_generate(hflow_t* flow, hpoint_t* point)
   /* every time we send out a point that's before
      the final point, increment the numebr of points
      we're waiting for results from */
-  if(! final_id || curr.point.id <= final_id)
-    outstanding_points++;
+  outstanding_points++;
 
 	flow->status = HFLOW_ACCEPT;
 	return 0;
@@ -253,6 +274,10 @@ int strategy_rejected(hflow_t* flow, hpoint_t* point)
 	hpoint_t* hint = &flow->point;
 	int orig_id = point->id;
 
+  idx_head = get_idx_by_id_and_delete_node(idx_head,
+                                           point->id,
+                                           tmp_idx,
+                                           N);
 	if (hint && hint->id != -1) {
 		if (hpoint_copy(point, hint) != 0) {
 			session_error("Could not copy hint during reject.");
@@ -290,32 +315,25 @@ int strategy_analyze(htrial_t* trial)
 			return -1;
 		}
 	}
+  idx_head = get_idx_by_id_and_delete_node(idx_head,
+                                           trial->point.id,
+                                           tmp_idx,
+                                           N);
 
-	if (trial->point.id == final_id) {
-		if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
-			session_error("Internal error: Could not set convergence status.");
-			return -1;
-		}
-	}
+  priority_queue_head = pqueue_push(priority_queue_head,
+                                    &trial->point,
+                                    perf,
+                                    tmp_idx,
+                                    N,
+                                    0);
 
   /* decrement the number of points we're waiting for
      when we get a point back that was generated before
      the final point */
-  if(! final_id || trial->point.id <= final_id)
-      outstanding_points--;
-
-  if (trial->point.id == final_id)
-      final_point_received = 1;
-
-	/* converged when the final point has been received,
-	   and there are no outstanding points */
-	if(outstanding_points <= 0 && final_point_received) {
-		if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
-			session_error("Internal error: Could not set convergence status.");
-			return -1;
-		}
-	}
-
+  outstanding_points--;
+  // if(outstanding_points == 0){
+  //   print_pqueue(priority_queue_head);
+  // }
 	return 0;
 }
 
@@ -332,26 +350,56 @@ int strategy_best(hpoint_t* point)
 }
 
 int get_next_point(void){
+	//First check to find out if we have un-analyzed points
 	if(queue_head != NULL){
-		curr.point = queue_head->point;
+		hpoint_copy(&curr.point, &queue_head->point);
 		memcpy(curr.idx, queue_head->idx, N*sizeof(unsigned long));
 		queue_head = queue_pop(queue_head);
-		if(generate_all_successors() == 0){
-			//Convergence
-			if(queue_head == NULL){
-				final_id = curr.point.id;
-				return 1;
-			}else{
-				return 0;
-			}
-		}else{
-			return -1;
+		return 0;
+	}
+	//If we dont have do the following:
+  //0) Check to find if we are waiting for points
+	//1) Rebalance the beam priority_queue. 
+	//2) Find all the unexpanded nodes
+	//3) Expand all the unexpanded nodes by adding their successors in the regular queue
+	//4) Mark them as expanded
+	//5) Continue with the regular queue
+	else{
+    if(outstanding_points != 0){
+      return 2;
+    }
+		//Step 1
+		int curr_depth, curr_width;
+		priority_queue_head = pqueue_beam_cut(priority_queue_head,
+                                          _width_,
+                                          _depth_,
+                                          &curr_width,
+                                          &curr_depth);
+    //Converged
+    if(curr_width == 0){
+      return 1;
+    }
+
+		//Step 2-4
+		pqueue_node_t *curr_unexpanded;
+		curr_unexpanded = pqueue_beam_next_to_expand(priority_queue_head);
+		while(curr_unexpanded != NULL){
+      generate_all_successors(curr_unexpanded);
+			curr_unexpanded->expanded = 1;
+			curr_unexpanded = pqueue_beam_next_to_expand(priority_queue_head);
 		}
+
+    //Nothing to expand = convergence
+    if(queue_head == NULL){
+      return 1;
+    }
+    //Now we recall get_next_point because the queue is initialized
+    return get_next_point();
 	}
 	return -1;
 }
 
-int generate_all_successors(void)
+int generate_all_successors(pqueue_node_t *node_to_expand)
 {
 	double next_r, prev_r;
 	if (remaining_passes <= 0)
@@ -361,100 +409,124 @@ int generate_all_successors(void)
 
 		switch (range[i].type) {
 		case HVAL_INT:
-			if (curr.point.val[i].value.i + range[i].bounds.i.step < range[i].bounds.i.max) {
+			if (node_to_expand->point.val[i].value.i + range[i].bounds.i.step 
+					< range[i].bounds.i.max) {
 				hpoint_t new_point = HPOINT_INITIALIZER;
-				hpoint_copy(&new_point, &curr.point);
+				hpoint_copy(&new_point, &node_to_expand->point);
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.i += range[i].bounds.i.step;
-				curr.idx[i]++;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
-					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
-					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
+				node_to_expand->idx[i]++;
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+					queue_head = queue_push_back(queue_head,
+												               &new_point,
+												               node_to_expand->idx, N);
+					vqueue_head = vqueue_push_back(vqueue_head,
+												                 node_to_expand->idx, N);
 				}
-				curr.idx[i]--;
+				node_to_expand->idx[i]--;
 			}
 
-			if (curr.point.val[i].value.i - range[i].bounds.i.step > range[i].bounds.i.min &&
-				  curr.idx[i] >= 1) {
+			if (node_to_expand->point.val[i].value.i - range[i].bounds.i.step
+            > range[i].bounds.i.min &&
+				  node_to_expand->idx[i] >= 1) {
 				hpoint_t new_point = HPOINT_INITIALIZER;
-				hpoint_copy(&new_point, &curr.point);
+				hpoint_copy(&new_point, &node_to_expand->point);
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.i -= range[i].bounds.i.step;
-				curr.idx[i]--;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
-					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
-					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
+				node_to_expand->idx[i]--;
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+					queue_head = queue_push_back(queue_head,
+                                       &new_point,
+                                       node_to_expand->idx,
+                                       N);
+					vqueue_head = vqueue_push_back(vqueue_head, node_to_expand->idx, N);
 				}
-				curr.idx[i]++;
+				node_to_expand->idx[i]++;
 			}
 			break;
 
 		case HVAL_REAL:
 			next_r = (range[i].bounds.r.step > 0.0)
-				? range[i].bounds.r.min + ((curr.idx[i]+1) * range[i].bounds.r.step)
-				: nextafter(curr.point.val[i].value.r, HUGE_VAL);
+				? range[i].bounds.r.min
+          + ((node_to_expand->idx[i]+1) * range[i].bounds.r.step)
+				: nextafter(node_to_expand->point.val[i].value.r, HUGE_VAL);
 
 			prev_r = (range[i].bounds.r.step > 0.0)
-				? range[i].bounds.r.min + ((curr.idx[i]-1) * range[i].bounds.r.step)
-				: nextafter(curr.point.val[i].value.r, -HUGE_VAL);
+				? range[i].bounds.r.min
+          + ((node_to_expand->idx[i]-1) * range[i].bounds.r.step)
+				: nextafter(node_to_expand->point.val[i].value.r, -HUGE_VAL);
 
 			if (next_r <= range[i].bounds.r.max &&
-				next_r != curr.point.val[i].value.r)
+				next_r != node_to_expand->point.val[i].value.r)
 			{
 				hpoint_t new_point = HPOINT_INITIALIZER;
-				hpoint_copy(&new_point, &curr.point);
+				hpoint_copy(&new_point, &node_to_expand->point);
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.r = next_r;
-				curr.idx[i]++;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
-					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
-					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
+				node_to_expand->idx[i]++;
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+					queue_head = queue_push_back(queue_head,
+                                       &new_point,
+                                       node_to_expand->idx,
+                                       N);
+					vqueue_head = vqueue_push_back(vqueue_head, node_to_expand->idx, N);
 				}
-				curr.idx[i]--;
+				node_to_expand->idx[i]--;
 			}
 
 			if (prev_r >= range[i].bounds.r.min &&
-				prev_r != curr.point.val[i].value.r &&
-				curr.idx[i] >= 1)
+				prev_r != node_to_expand->point.val[i].value.r &&
+				node_to_expand->idx[i] >= 1)
 			{
 				hpoint_t new_point = HPOINT_INITIALIZER;
-				hpoint_copy(&new_point, &curr.point);
+				hpoint_copy(&new_point, &node_to_expand->point);
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.r = prev_r;
-				curr.idx[i]--;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
-					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
-					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
+				node_to_expand->idx[i]--;
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+					queue_head = queue_push_back(queue_head,
+                                       &new_point,
+                                       node_to_expand->idx,
+                                       N);
+					vqueue_head = vqueue_push_back(vqueue_head, node_to_expand->idx, N);
 				}
-				curr.idx[i]++;
+				node_to_expand->idx[i]++;
 			}
 			break;
 
 		case HVAL_STR:
-			if (curr.idx[i] + 1 < range[i].bounds.s.set_len) {
+			if (node_to_expand->idx[i] + 1 < range[i].bounds.s.set_len) {
 				hpoint_t new_point = HPOINT_INITIALIZER;
-				hpoint_copy(&new_point, &curr.point);
+				hpoint_copy(&new_point, &node_to_expand->point);
 				new_point.id = ++global_point_id;
-				new_point.val[i].value.s = range[i].bounds.s.set[curr.idx[i] + 1];
-				curr.idx[i] += 1;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
-					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
-					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
+				new_point.val[i].value.s =
+                    range[i].bounds.s.set[node_to_expand->idx[i] + 1];
+				node_to_expand->idx[i] += 1;
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+					queue_head = queue_push_back(queue_head,
+                                       &new_point,
+                                       node_to_expand->idx,
+                                       N);
+					vqueue_head = vqueue_push_back(vqueue_head, node_to_expand->idx, N);
 				}
-				curr.idx[i] -=1;
+				node_to_expand->idx[i] -=1;
 			}
 
-			if (curr.idx[i] >= 1) {
+			if (node_to_expand->idx[i] >= 1) {
 				hpoint_t new_point = HPOINT_INITIALIZER;
-				hpoint_copy(&new_point, &curr.point);
+				hpoint_copy(&new_point, &node_to_expand->point);
 				new_point.id = ++global_point_id;
-				new_point.val[i].value.s = range[i].bounds.s.set[curr.idx[i] - 1];
-				curr.idx[i] -= 1;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
-					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
-					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
+				new_point.val[i].value.s = 
+                    range[i].bounds.s.set[node_to_expand->idx[i] - 1];
+				node_to_expand->idx[i] -= 1;
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+					queue_head = queue_push_back(queue_head,
+                                       &new_point,
+                                       node_to_expand->idx,
+                                       N);
+					vqueue_head = vqueue_push_back(vqueue_head, node_to_expand->idx, N);
 				}
-				curr.idx[i] +=1;
+				node_to_expand->idx[i] +=1;
 			}
 			break;
 		default:
