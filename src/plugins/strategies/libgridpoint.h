@@ -12,6 +12,8 @@ typedef struct gridpoint {
   long *indices;
 } gridpoint_t;
 
+extern const gridpoint_t GRIDPOINT_INITIALIZER;
+
 /*
  * Stores the information that libgridpoint will need for the rest of its
  * functions.
@@ -54,6 +56,9 @@ int gridpoint_rand(struct lgp_info *info, gridpoint_t *result);
  */
 int gridpoint_from_hpoint(struct lgp_info *info,
                           hpoint_t *hpoint, gridpoint_t *result);
+
+int gridpoint_copy(struct lgp_info *info,
+                   gridpoint_t *dest, gridpoint_t *src);
 
 /*
  * Starting from a grid point, move a certain number of steps along one

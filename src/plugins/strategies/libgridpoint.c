@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "hpoint.h"
 #include "libgridpoint.h"
 #include "session-core.h"
 
@@ -8,6 +9,11 @@ struct lgp_info {
   hsignature_t sig;
   long *max_indices;
 };
+
+// pasting HPOINT_INITIALIZER in here explicitly bc it's not a compile-time
+// constant. there must be a better way.
+const gridpoint_t GRIDPOINT_INITIALIZER = {{-1, 0, NULL, 0}, NULL};
+//const gridpoint_t GRIDPOINT_INITIALIZER = {HPOINT_INITIALIZER, NULL};
 
 // forward declarations
 int point_from_indices(struct lgp_info *info, gridpoint_t *gpt);
@@ -60,11 +66,14 @@ void libgridpoint_fini(struct lgp_info *info) {
 int gridpoint_init(struct lgp_info *info, gridpoint_t *gpt) {
   int result;
 
-  gpt->indices = (long *) calloc(info->sig.range_len, sizeof(long));
-  if (!gpt->indices)
-    return -1;
-
   gpt->point = HPOINT_INITIALIZER;
+
+  gpt->indices = (long *) calloc(info->sig.range_len, sizeof(long));
+  if (!gpt->indices) {
+    session_error("Couldn't allocate indices in gridpoint_init");
+    goto error;
+  }
+
   result = hpoint_init(&gpt->point, info->sig.range_len);
   if (result < 0) {
     session_error("Error in hpoint_init called from gridpoint_init");
@@ -92,6 +101,14 @@ int gridpoint_rand(struct lgp_info *info, gridpoint_t *gpt) {
   if (point_from_indices(info, gpt) < 0)
     return -1;
   
+  return 0;
+}
+
+int gridpoint_copy(struct lgp_info *info,
+                   gridpoint_t *dest, gridpoint_t *src) {
+  if (hpoint_copy(&dest->point, &src->point) < 0)
+    return -1;
+  memcpy(dest->indices, src->indices, info->sig.range_len * sizeof(long));
   return 0;
 }
 
