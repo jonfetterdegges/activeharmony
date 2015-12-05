@@ -128,6 +128,12 @@ int strategy_init(hsignature_t *sig) {
   else
     next_reset_step = steps_between_reset;
 
+  // initialize convergence key
+  if (session_setcfg(CFGKEY_CONVERGED, "0") != 0) {
+    session_error("Could not set " CFGKEY_CONVERGED " config variable.");
+    return -1;
+  }
+
   // initialize libgridpoint
   lgp_info = libgridpoint_init(sig);
   if (!lgp_info) {
@@ -206,6 +212,8 @@ int exploration_of_id(int id) {
 
 int strategy_fini() {
   int i;
+  dbg("\nentering SA strategy_fini\n");
+
   gridpoint_fini(&best);
   if (current_pts) {
     for (i = 0; i < n_explorations; i++)
@@ -217,11 +225,13 @@ int strategy_fini() {
       gridpoint_fini(generated_pts + i);
     free(generated_pts);
   }
-  if (current_perfs)
-    free(current_perfs);
+  free(current_perfs);
   free(step_to_generate);
   free(outstanding);
+
   libgridpoint_fini(lgp_info);
+
+  dbg("leaving SA strategy_fini\n");
   return 0;
 }
 
@@ -282,8 +292,13 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
   int min_step_to_generate = INT_MAX;
   double worst_current_perf = 0.0;
   int step_with_worst_perf;
+  int converged = 0;
   for (int i = 0; i < n_explorations; i++) {
     // special case detection
+    if (step_to_generate[i] >= ntemp) {
+      converged = 1;
+      break;
+    }
     if (reset_now && (outstanding[i]
                          || step_to_generate[i] != next_reset_step))
       reset_now = 0;
@@ -297,6 +312,16 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
       exploration = i;
       min_step_to_generate = step_to_generate[i];
     }
+  }
+
+  if (converged) {
+    dbg("converged, returning best point instead of moving\n");
+    if (hpoint_copy(point, &best.point) < 0) {
+      session_error("failed to copy best point in SA strategy_generate");
+      return -1;
+    }
+    flow->status = HFLOW_ACCEPT;
+    return 0;
   }
 
   if (reset_now) {
@@ -401,7 +426,7 @@ int move_point(gridpoint_t *result, gridpoint_t *origin) {
 }
 
 int strategy_analyze(htrial_t* trial) {
-  dbg("\nentering strategy_analyze\n");
+  dbg("\nentering SA strategy_analyze\n");
 
   int exploration = exploration_of_id(trial->point.id);
 
@@ -412,12 +437,14 @@ int strategy_analyze(htrial_t* trial) {
     return 0;
   double perf_candidate = hperf_unify(trial->perf);
 
+#ifdef DEBUG
   char gpt_buf[256];
-  printable_gridpoint(lgp_info, gpt_buf, 256, candidate);
   dbg(" expl %d\n", exploration);
-  dbg(" cand perf %.4g, pt %s\n", perf_candidate, gpt_buf);
   printable_gridpoint(lgp_info, gpt_buf, 256, current_pts+exploration);
-  dbg(" cand perf %.4g, pt %s\n", current_perfs[exploration], gpt_buf);
+  dbg(" curr perf %.4g, pt %s\n", current_perfs[exploration], gpt_buf);
+  printable_gridpoint(lgp_info, gpt_buf, 256, candidate);
+  dbg(" cand perf %.4g, pt %s\n", perf_candidate, gpt_buf);
+#endif
 
   // two things to do now: (1) update "best" if needed, (2) update current
   // point according to the transition probability. these are independent:
@@ -446,6 +473,15 @@ int strategy_analyze(htrial_t* trial) {
   n_outstanding--;
   outstanding[exploration] = 0;
   step_to_generate[exploration]++;
+
+  // finally, if step_to_generate for any exploration has reached max, indicate
+  // convergence.
+  if (step_to_generate[exploration] > ntemp) {
+    if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
+      session_error("Couldn't set convergence flag in SA");
+      return -1;
+    }
+  }
 
   return 0;
 }
