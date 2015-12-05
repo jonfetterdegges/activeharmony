@@ -58,7 +58,6 @@ int runChild(char *path, char **argv, float *time, int *precision, int do_read) 
   pid_t childPid = fork();
 
   if (childPid) {
-    printf("parent fork of %s\n", path);
     // first error check
     if (childPid < 0) {
       perror("Error forking child");
@@ -71,9 +70,7 @@ int runChild(char *path, char **argv, float *time, int *precision, int do_read) 
     int read_ret = 0;
     char buf[BUFLEN];
     if (do_read) {
-      printf("about to read\n");
       read_ret = read(pipefd[0], buf, BUFLEN-1);
-      printf("done reading\n");
       if (read_ret < 0) {
         perror("Error reading precision from child");
         return -1;
@@ -98,17 +95,22 @@ int runChild(char *path, char **argv, float *time, int *precision, int do_read) 
       sscanf(buf, "%d", precision);
     }
 
+    close(pipefd[0]);
+    close(pipefd[1]);
+
     return 0;
 
   } else {
     // fork succeeded, this is the child process
     int ret;
 
-    // redirect stdout to the write end of the pipe
-    ret = dup2(pipefd[1], 1);
-    if (ret < 0) {
-      perror("Error redirecting stdout");
-      return -1;
+    if (do_read) {
+      // redirect stdout to the write end of the pipe
+      ret = dup2(pipefd[1], 1);
+      if (ret < 0) {
+        perror("Error redirecting stdout");
+        return -1;
+      }
     }
 
     // exec the child
@@ -157,7 +159,7 @@ float run() {
   float time;
   int ret;
 
-  ret = runChild(TARGET, args, &time, &precision, 1);
+  ret = runChild(TARGET, args, &time, &precision, 0);
   if (ret < 0)
     exit(2);
   return time;
@@ -243,6 +245,16 @@ int main(int argc, char **argv) {
   oldval = ah_set_cfg(desc, "BANDIT_STRATEGIES", "exhaustive.so:random.so:nm.so");
   if (oldval == NULL)
     ah_die_detail("ah_setcfg BANDIT_STRATEGIES failed", desc);
+  if (ah_set_cfg(desc, "SA_TMAX", "3") == NULL)
+    ah_die_detail("ah_set_cfg SA_TMAX failed", desc);
+  if (ah_set_cfg(desc, "SA_TMIN", "0.02") == NULL)
+    ah_die_detail("ah_set_cfg SA_TMIN failed", desc);
+  if (ah_set_cfg(desc, "SA_NPOINTS", "2") == NULL)
+    ah_die_detail("ah_set_cfg SA_NPOINTS failed", desc);
+  if (ah_set_cfg(desc, "SA_TSTEPS", "100") == NULL)
+    ah_die_detail("ah_set_cfg SA_TSTEPS failed", desc);
+  if (ah_set_cfg(desc, "SA_RESET_STEPS", "10") == NULL)
+    ah_die_detail("ah_set_cfg SA_RESET_STEPS failed", desc);
 
 
   // start a Harmony session
