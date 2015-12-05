@@ -107,4 +107,6 @@ int gridpoint_move_multi(struct lgp_info *info,
                          gridpoint_t *origin, int *steps,
                          gridpoint_t *result);
 
+int printable_gridpoint(struct lgp_info *info, char *buf, int buflen, gridpoint_t *gpt);
+
 #endif

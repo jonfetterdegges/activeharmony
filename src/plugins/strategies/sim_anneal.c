@@ -1,4 +1,5 @@
-#define DEBUG 1
+//#define DEBUG 1
+#undef DEBUG
 #ifdef DEBUG
 #define dbg(x...) fprintf(stderr, x)
 #else
@@ -28,9 +29,9 @@
 #define TSTEPS_PARAM "SA_TSTEPS"
 #define TSTEPS_DEFAULT "200"
 #define NPOINT_PARAM "SA_NPOINTS"
-#define NPOINT_DEFAULT "1"
-#define NSTEPS_EXCHANGE_PARAM "SA_EXCHANGE_STEPS"
-#define NSTEPS_EXCHANGE_DEFAULT "20"
+#define NPOINT_DEFAULT "3"
+#define NSTEPS_RESET_PARAM "SA_RESET_STEPS"
+#define NSTEPS_RESET_DEFAULT "20"
 
 hcfg_info_t plugin_keyinfo[] = {
     { TMAX_PARAM, TMAX_DEFAULT,
@@ -42,7 +43,7 @@ hcfg_info_t plugin_keyinfo[] = {
     { NPOINT_PARAM, NPOINT_DEFAULT,
       "Number of parallel explorations to perform. "
       "1 means operate serially." },
-    { NSTEPS_EXCHANGE_PARAM, NSTEPS_EXCHANGE_DEFAULT,
+    { NSTEPS_RESET_PARAM, NSTEPS_RESET_DEFAULT,
       "Number of steps to take before an exploration resets to the best "
       "known point. 0 means never reset." },
     { NULL, NULL, NULL }
@@ -67,15 +68,15 @@ int n_explorations;
 int n_outstanding;
 int *outstanding = NULL;
 int *step_to_generate = NULL;
-int steps_between_exchange;
-int next_exchange_step;
+int steps_between_reset;
+int next_reset_step;
 
 // forward function declarations
 int point_id(int tstep, int exploration);
 int exploration_of_id(int id);
 int move_point(gridpoint_t *result, gridpoint_t *origin);
 double transition_prob(double perf_curr, double perf_candidate, int tstep);
-
+void print_current(void);
 
 
 int strategy_init(hsignature_t *sig) {
@@ -117,26 +118,29 @@ int strategy_init(hsignature_t *sig) {
     goto error;
   }
 
-  steps_between_exchange = (int) hcfg_int(session_cfg, NSTEPS_EXCHANGE_PARAM);
-  if (steps_between_exchange < 0) {
-    session_error("Error retrieving parameter " NSTEPS_EXCHANGE_PARAM ".");
+  steps_between_reset = (int) hcfg_int(session_cfg, NSTEPS_RESET_PARAM);
+  if (steps_between_reset < 0) {
+    session_error("Error retrieving parameter " NSTEPS_RESET_PARAM ".");
     goto error;
   }
-  if (steps_between_exchange == 0)
-    next_exchange_step = INT_MAX;
+  if (steps_between_reset == 0)
+    next_reset_step = INT_MAX;
   else
-    next_exchange_step = steps_between_exchange;
+    next_reset_step = steps_between_reset;
 
   // initialize libgridpoint
   lgp_info = libgridpoint_init(sig);
+  if (!lgp_info) {
+    goto error;
+  }
 
   // candidate points per exploration
   n_dims = sig->range_len;
   // calloc candidate array so that unallocated members are NULL in case of
   // failure
-  current_pts = (gridpoint_t *) calloc(n_explorations, sizeof(gridpoint_t *));
+  current_pts = (gridpoint_t *) calloc(n_explorations, sizeof(gridpoint_t));
   current_perfs = (double *) malloc(n_explorations * sizeof(double));
-  generated_pts = (gridpoint_t *) calloc(n_explorations, sizeof(gridpoint_t *));
+  generated_pts = (gridpoint_t *) calloc(n_explorations, sizeof(gridpoint_t));
   if (!current_pts || !current_perfs || !generated_pts)
     goto error;
   for (i = 0; i < n_explorations; i++) {
@@ -243,8 +247,23 @@ but who cares?
 and that is that
  */
 
+void print_current() {
+  int i;
+  dbg("%d explorations\n", n_explorations);
+  for (i = 0; i < n_explorations; i++) {
+    char buf[256];
+    printable_gridpoint(lgp_info, buf, 256, current_pts+i);
+    dbg(" expl %d, step %d (%s), curr %s\n", i, step_to_generate[i],
+        outstanding[i] ? "os" : "av", buf);
+  }
+}
+
 int strategy_generate(hflow_t* flow, hpoint_t* point) {
+  dbg("\nentering SA strategy_generate\n");
+  print_current();
+
   if (n_outstanding >= n_explorations) {
+    dbg("waiting for results on all explorations\n");
     flow->status = HFLOW_WAIT;
     return 0;
   }
@@ -252,46 +271,39 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
   // which exploration should we use?
   // criteria:
   // first detect a special case: all explorations have outstanding == false and
-  //   step_to_generate == next_exchange_step. in this case find the exploration
+  //   step_to_generate == next_reset_step. in this case find the exploration
   //   with the worst performance, set its current to best or best_hint
   //   (whichever is better), and step from there.
   // if we are not in the special case:
   //   among explorations with outstanding==true,
   //   use the one with the minimum step_to_generate.
-  // TODO can this step an exploration past next_exchange_step? yes, probably.
   int exploration = -1;
-  int exchange_now = 1;
+  int reset_now = 1;
   int min_step_to_generate = INT_MAX;
   double worst_current_perf = 0.0;
   int step_with_worst_perf;
   for (int i = 0; i < n_explorations; i++) {
     // special case detection
-    if (exchange_now && (outstanding[i]
-                         || step_to_generate[i] != next_exchange_step))
-      exchange_now = 0;
-    if (exchange_now && current_perfs[i] > worst_current_perf) {
+    if (reset_now && (outstanding[i]
+                         || step_to_generate[i] != next_reset_step))
+      reset_now = 0;
+    if (reset_now && current_perfs[i] > worst_current_perf) {
       step_with_worst_perf = i;
       worst_current_perf = current_perfs[i];
     }
     // regular assignment
     if (!outstanding[i] && step_to_generate[i] < min_step_to_generate
-        && step_to_generate[i] < next_exchange_step) {
+        && step_to_generate[i] < next_reset_step) {
       exploration = i;
       min_step_to_generate = step_to_generate[i];
     }
   }
 
-  if (exploration == -1) {
-    // this happens when some explorations are waiting at the reset point, and
-    // others are waiting for analysis; in this case we just wait
-    flow->status = HFLOW_WAIT;
-    return 0;
-  }
-
-  if (exchange_now) {
+  if (reset_now) {
     // reset the current location before moving
-    next_exchange_step += steps_between_exchange;
+    next_reset_step += steps_between_reset;
     exploration = step_with_worst_perf;
+    dbg("resetting exploration %d\n", exploration);
     if (best_hint_perf < best_perf) {
       // some other strategy has the global best; search from there
       if (gridpoint_from_hpoint(lgp_info, &best_hint, current_pts+exploration) < 0)
@@ -303,12 +315,23 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
     }
   }
 
-  // now generate the 
-  if (move_point(generated_pts+target, current_pts+target) < 0) {
+  if (exploration == -1) {
+    // this happens when some explorations are waiting at the reset point, and
+    // others are waiting for analysis; in this case we just wait
+    dbg("waiting for all explorations to reach reset point %d\n", next_reset_step);
+    flow->status = HFLOW_WAIT;
+    return 0;
+  }
+
+  // now move from the current point
+  dbg("generating for exploration %d\n", exploration);
+  if (move_point(generated_pts+exploration, current_pts+exploration) < 0) {
     session_error("Failed to step from current point in SA strategy_generate");
     return -1;
   }
-  if (hpoint_copy(point, &generated_pts[target].point) < 0) {
+  generated_pts[exploration].point.id = point_id(step_to_generate[exploration],
+                                                 exploration);
+  if (hpoint_copy(point, &generated_pts[exploration].point) < 0) {
     session_error("Failed hpoint_copy in SA strategy_generate");
     return -1;
   }
@@ -318,6 +341,39 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
   outstanding[exploration] = 1;
   n_outstanding++;
 
+  flow->status = HFLOW_ACCEPT;
+  return 0;
+}
+
+int strategy_rejected(hflow_t* flow, hpoint_t* point) {
+  dbg("\nentering SA strategy_rejected\n");
+  hpoint_t* hint = &flow->point;
+  int orig_id = point->id;
+  int exploration = exploration_of_id(orig_id);
+
+  if (hint && hint->id != -1) {
+    // accept the hint, and update the generated_pts entry
+    if (gridpoint_from_hpoint(lgp_info, hint, generated_pts+exploration) < 0) {
+      session_error("Couldn't create gridpoint from hint in SA reject.");
+      return -1;
+    }
+    if (hpoint_copy(point, hint) != 0) {
+      session_error("Could not copy hint during reject.");
+      return -1;
+    }
+  } else {
+    // try another move from the exploration's current point
+    if (move_point(generated_pts+exploration, current_pts+exploration) < 0) {
+      session_error("Failed to step from current point in SA strategy_reject");
+      return -1;
+    }
+    if (hpoint_copy(point, &generated_pts[exploration].point) < 0) {
+      session_error("Couldn't copy new point in SA strategy_reject");
+      return -1;
+    }
+  }
+
+  flow->status = HFLOW_ACCEPT;
   return 0;
 }
 
@@ -340,10 +396,13 @@ int move_point(gridpoint_t *result, gridpoint_t *origin) {
     if (steps_taken < 0)
       return -1;
   } while (steps_taken < 1);
+
   return 0;
 }
 
 int strategy_analyze(htrial_t* trial) {
+  dbg("\nentering strategy_analyze\n");
+
   int exploration = exploration_of_id(trial->point.id);
 
   // "candidate" is the point just returned from exploration
@@ -353,6 +412,13 @@ int strategy_analyze(htrial_t* trial) {
     return 0;
   double perf_candidate = hperf_unify(trial->perf);
 
+  char gpt_buf[256];
+  printable_gridpoint(lgp_info, gpt_buf, 256, candidate);
+  dbg(" expl %d\n", exploration);
+  dbg(" cand perf %.4g, pt %s\n", perf_candidate, gpt_buf);
+  printable_gridpoint(lgp_info, gpt_buf, 256, current_pts+exploration);
+  dbg(" cand perf %.4g, pt %s\n", current_perfs[exploration], gpt_buf);
+
   // two things to do now: (1) update "best" if needed, (2) update current
   // point according to the transition probability. these are independent:
   // neither implies the other.
@@ -360,15 +426,21 @@ int strategy_analyze(htrial_t* trial) {
     if (gridpoint_copy(lgp_info, &best, candidate) < 0)
       return -1;
     best_perf = perf_candidate;
+    dbg(" new best\n");
   }
 
   double prob = transition_prob(current_perfs[exploration], perf_candidate,
                                 step_to_generate[exploration]);
+  dbg(" temp %.4g, prob %.4g, ",
+      exp(logtmax - dlogt * step_to_generate[exploration]), prob);
   if (prob > drand48()) {
     // change "current" to the candidate point
     if (gridpoint_copy(lgp_info, current_pts+exploration, candidate) < 0)
       return -1;
     current_perfs[exploration] = perf_candidate;
+    dbg("moved\n");
+  } else {
+    dbg("stayed\n");
   }
 
   n_outstanding--;
@@ -385,7 +457,7 @@ double transition_prob(double perf_curr, double perf_candidate, int tstep) {
 }
 
 int strategy_hint(htrial_t *trial) {
-  // track global optimum; will consider on exchange
+  // track global optimum; will consider on reset
   double perf = hperf_unify(trial->perf);
   if (perf < best_hint_perf) {
     if (hpoint_copy(&best_hint, &trial->point) < 0)
@@ -393,5 +465,14 @@ int strategy_hint(htrial_t *trial) {
     best_hint_perf = perf;
   }
 
+  return 0;
+}
+
+int strategy_best(hpoint_t *point) {
+  dbg("\nentering SA strategy_best\n");
+  if (hpoint_copy(point, &best.point) < 0) {
+    session_error("Failed to copy in SA strategy_best.");
+    return -1;
+  }
   return 0;
 }

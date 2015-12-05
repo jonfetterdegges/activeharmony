@@ -24,7 +24,7 @@ LIBEXEC_TGTS=angel.so \
              random.so \
              bandit.so \
              beam.so \
-#            sim_anneal.so \
+             sim_anneal.so \
              breadth_first.so
 
 angel.so: REQ_LDLIBS+=-lm
@@ -50,8 +50,8 @@ beam.so: libvertex.o queues.o
 
 bandit.so: REQ_LDLIBS+=-lm
 
-# sim_anneal.so: REQ_LDLIBS+=-lm
-# sim_anneal.so: libgridpoint.o
+sim_anneal.so: REQ_LDLIBS+=-lm
+sim_anneal.so: libgridpoint.o
 
 # Active Harmony makefiles should always include this file last.
 include $(TO_BASE)/make/common.mk

@@ -68,7 +68,7 @@ hcfg_info_t plugin_keyinfo[] = {
     { TRADEOFF_PARAM, "1.0",
       "Tradeoff between exploration and exploitation; "
       "higher means switch strategies more often." },
-    { NULL }
+    { NULL, NULL, NULL }
 };
 
 // have to keep MAX_NUM_STRATEGIES in sync with POINT_ID_MASK and POINT_ID_BITS;
