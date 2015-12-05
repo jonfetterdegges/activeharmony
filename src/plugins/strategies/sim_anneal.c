@@ -71,6 +71,8 @@ int *step_to_generate = NULL;
 int steps_between_reset;
 int next_reset_step;
 
+int converged;
+
 // forward function declarations
 int point_id(int tstep, int exploration);
 int exploration_of_id(int id);
@@ -133,6 +135,7 @@ int strategy_init(hsignature_t *sig) {
     session_error("Could not set " CFGKEY_CONVERGED " config variable.");
     return -1;
   }
+  converged = 0;
 
   // initialize libgridpoint
   lgp_info = libgridpoint_init(sig);
@@ -272,6 +275,16 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
   dbg("\nentering SA strategy_generate\n");
   print_current();
 
+  if (converged) {
+    dbg("converged, returning best point instead of moving\n");
+    if (hpoint_copy(point, &best.point) < 0) {
+      session_error("failed to copy best point in SA strategy_generate");
+      return -1;
+    }
+    flow->status = HFLOW_ACCEPT;
+    return 0;
+  }
+
   if (n_outstanding >= n_explorations) {
     dbg("waiting for results on all explorations\n");
     flow->status = HFLOW_WAIT;
@@ -292,13 +305,8 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
   int min_step_to_generate = INT_MAX;
   double worst_current_perf = 0.0;
   int step_with_worst_perf;
-  int converged = 0;
   for (int i = 0; i < n_explorations; i++) {
     // special case detection
-    if (step_to_generate[i] >= ntemp) {
-      converged = 1;
-      break;
-    }
     if (reset_now && (outstanding[i]
                          || step_to_generate[i] != next_reset_step))
       reset_now = 0;
@@ -312,16 +320,6 @@ int strategy_generate(hflow_t* flow, hpoint_t* point) {
       exploration = i;
       min_step_to_generate = step_to_generate[i];
     }
-  }
-
-  if (converged) {
-    dbg("converged, returning best point instead of moving\n");
-    if (hpoint_copy(point, &best.point) < 0) {
-      session_error("failed to copy best point in SA strategy_generate");
-      return -1;
-    }
-    flow->status = HFLOW_ACCEPT;
-    return 0;
   }
 
   if (reset_now) {
@@ -477,6 +475,8 @@ int strategy_analyze(htrial_t* trial) {
   // finally, if step_to_generate for any exploration has reached max, indicate
   // convergence.
   if (step_to_generate[exploration] > ntemp) {
+    dbg(" flagging convergence");
+    converged = 1;
     if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
       session_error("Couldn't set convergence flag in SA");
       return -1;
