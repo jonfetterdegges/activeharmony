@@ -276,17 +276,19 @@ int strategy_rejected(hflow_t* flow, hpoint_t* point)
 
 int strategy_hint(htrial_t* hint){
   infer_indices(&hint->point, tmp_idx);
-  int is_in_pqueue = pqueue_contains(priority_queue_head, tmp_idx, N);
   int is_in_visited = vqueue_contains(vqueue_head, tmp_idx, N);
   double perf = hperf_unify(hint->perf);
 
-  if(is_in_visited == 0 && is_in_pqueue == 0){
+  if(is_in_visited == 0){
     priority_queue_head = pqueue_push(priority_queue_head,
                                       &hint->point,
                                       perf,
                                       tmp_idx,
                                       N,
                                       0);
+    vqueue_head = vqueue_push_back(vqueue_head,
+                                   tmp_idx,
+                                   N);
   }
   return 0;
 }
