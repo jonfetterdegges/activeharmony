@@ -64,14 +64,11 @@ typedef struct curr_node{
 	unsigned long* idx;
 }curr_n_t;
 
-
-hpoint_t best;
-double   best_perf;
-
 /* Forward function definitions. */
 int strategy_cfg(hsignature_t* sig);
 int get_next_point(void);
 int generate_all_successors(pqueue_node_t *);
+void infer_indices(const hpoint_t *point, unsigned long *indices);
 
 /* Variables to track current search state. */
 int N;
@@ -82,11 +79,11 @@ curr_n_t curr;
 int remaining_passes = 1;
 int outstanding_points = 0;
 int global_point_id = 0;
+int converged = 0;
 
 queue_node_t* queue_head = NULL;
 pqueue_node_t* priority_queue_head = NULL;
 visited_node_t *vqueue_head = NULL;
-queue_node_t* idx_head = NULL;
 
 unsigned long *tmp_idx;
 
@@ -130,18 +127,13 @@ int strategy_init(hsignature_t* sig)
 			return -1;
 		}
 
-		/* The best point and trial counter should only be initialized once,
-		 * and thus be retained across a restart.
-		 */
-		best = HPOINT_INITIALIZER;
-		best_perf = HUGE_VAL;
-
 		curr.point.id = 1;
 		global_point_id = 1;
 
 		queue_head = NULL;
 		priority_queue_head = NULL;
 		vqueue_head = NULL;
+    converged = 0;
 	}
 
 	/* Initialization for subsequent calls to strategy_init(). */
@@ -219,6 +211,8 @@ int strategy_cfg(hsignature_t* sig)
 
 	queue_head = queue_push_back(queue_head, &curr.point, curr.idx, N);
 	vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
+  converged = 0;
+
 	return 0;
 }
 
@@ -236,25 +230,17 @@ int strategy_generate(hflow_t* flow, hpoint_t* point)
       flow->status = HFLOW_WAIT;
       return 0;
     }else if(rc == 1){
-      if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
-        session_error("Internal error: Could not set convergence status.");
+      converged = 1;
+      if (hpoint_copy(point, &priority_queue_head->point) != 0) {
+        session_error("Could not copy current point during generation.");
         return -1;
       }
-      flow->status = HFLOW_WAIT;
-      return 0;
+    }else{
+  		if (hpoint_copy(point, &curr.point) != 0) {
+  			session_error("Could not copy current point during generation.");
+  			return -1;
+  		}
     }
-
-		if (hpoint_copy(point, &curr.point) != 0) {
-			session_error("Could not copy current point during generation.");
-			return -1;
-		}
-    idx_head = queue_push_back(idx_head, &curr.point, curr.idx, N);
-    // print_curr();
-	}else {
-		if (hpoint_copy(point, &best) != 0) {
-			session_error("Could not copy best point during generation.");
-			return -1;
-		}
 	}
 
   /* every time we send out a point that's before
@@ -274,31 +260,35 @@ int strategy_rejected(hflow_t* flow, hpoint_t* point)
 	hpoint_t* hint = &flow->point;
 	int orig_id = point->id;
 
-  idx_head = get_idx_by_id_and_delete_node(idx_head,
-                                           point->id,
-                                           tmp_idx,
-                                           N);
-	if (hint && hint->id != -1) {
-		if (hpoint_copy(point, hint) != 0) {
-			session_error("Could not copy hint during reject.");
-			return -1;
-		}
-	}
-	else {
-    if (get_next_point() != 0){
-      return -1;
-    }
+  if (get_next_point() != 0){
+    return -1;
+  }
 
-		if (hpoint_copy(point, &curr.point) != 0) {
-			session_error("Could not copy current point during reject.");
-			return -1;
-		}
-
-	}
+  if (hpoint_copy(point, &curr.point) != 0) {
+    session_error("Could not copy current point during reject.");
+    return -1;
+  }
 	point->id = orig_id;
 
 	flow->status = HFLOW_ACCEPT;
 	return 0;
+}
+
+int strategy_hint(htrial_t* hint){
+  infer_indices(&hint->point, tmp_idx);
+  int is_in_pqueue = pqueue_contains(priority_queue_head, tmp_idx, N);
+  int is_in_visited = vqueue_contains(vqueue_head, tmp_idx, N);
+  double perf = hperf_unify(hint->perf);
+
+  if(is_in_visited == 0 && is_in_pqueue == 0){
+    priority_queue_head = pqueue_push(priority_queue_head,
+                                      &hint->point,
+                                      perf,
+                                      tmp_idx,
+                                      N,
+                                      0);
+  }
+  return 0;
 }
 
 /*
@@ -308,19 +298,9 @@ int strategy_analyze(htrial_t* trial)
 {
 	double perf = hperf_unify(trial->perf);
 
-	if (best_perf > perf) {
-		best_perf = perf;
-		if (hpoint_copy(&best, &trial->point) != 0) {
-			session_error("Internal error: Could not copy point.");
-			return -1;
-		}
-	}
-  idx_head = get_idx_by_id_and_delete_node(idx_head,
-                                           trial->point.id,
-                                           tmp_idx,
-                                           N);
+  infer_indices(&trial->point, tmp_idx);
 
-  priority_queue_head = pqueue_push(priority_queue_head,
+ 	priority_queue_head = pqueue_push(priority_queue_head,
                                     &trial->point,
                                     perf,
                                     tmp_idx,
@@ -331,6 +311,12 @@ int strategy_analyze(htrial_t* trial)
      when we get a point back that was generated before
      the final point */
   outstanding_points--;
+  if(converged){
+      if (session_setcfg(CFGKEY_CONVERGED, "1") != 0) {
+        session_error("Internal error: Could not set convergence status.");
+        return -1;
+      }
+  }
   // if(outstanding_points == 0){
   //   print_pqueue(priority_queue_head);
   // }
@@ -342,7 +328,8 @@ int strategy_analyze(htrial_t* trial)
  */
 int strategy_best(hpoint_t* point)
 {
-	if (hpoint_copy(point, &best) != 0) {
+  //The best point will always be in the top place of the queue
+	if (hpoint_copy(point, &priority_queue_head->point) != 0) {
 		session_error("Could not copy best point during request for best.");
 		return -1;
 	}
@@ -397,6 +384,27 @@ int get_next_point(void){
     return get_next_point();
 	}
 	return -1;
+}
+
+void infer_indices(const hpoint_t *point, unsigned long *indices){
+  // infer indices
+  for (int i = 0; i < N; i++) {
+    fprintf(stderr, "%d\n", i);
+    switch (range[i].type) {
+    case HVAL_INT:
+      indices[i] = hrange_int_index(&range[i].bounds.i, point->val[i].value.i);
+      break;
+    case HVAL_REAL:
+      indices[i] = hrange_real_index(&range[i].bounds.r, point->val[i].value.r);
+      break;
+    case HVAL_STR:
+      indices[i] = hrange_str_index(&range[i].bounds.s, point->val[i].value.s);
+      break;
+    default:
+      session_error("bad range type in gridpoint_from_hpoint");
+      return;
+    }
+  }
 }
 
 int generate_all_successors(pqueue_node_t *node_to_expand)

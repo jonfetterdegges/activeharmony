@@ -81,6 +81,18 @@ pqueue_node_t *pqueue_beam_next_to_expand(pqueue_node_t *queue){
   return iter;
 }
 
+int pqueue_contains(pqueue_node_t *queue, unsigned long *idx, int idx_size){
+  pqueue_node_t *iter = queue;
+  while(iter != NULL){
+    if(memcmp(iter->idx, idx, idx_size*sizeof(unsigned long)) == 0){
+      return 0;
+    }else{
+      iter = iter->next;
+    }
+  }
+  return -1;
+}
+
 pqueue_node_t *pqueue_push(pqueue_node_t *queue, const hpoint_t* point, double perf, unsigned long *idx, int idx_size, int expanded){
   pqueue_node_t *new_node = (pqueue_node_t *)malloc(sizeof(pqueue_node_t));
   new_node->point = HPOINT_INITIALIZER;
@@ -144,33 +156,6 @@ queue_node_t *queue_push_back(queue_node_t *queue, hpoint_t* point, unsigned lon
     find_last->next = new_node;
   }else{
     queue = new_node;
-  }
-  return queue;
-}
-
-
-queue_node_t *get_idx_by_id_and_delete_node(queue_node_t *queue, int point_id, unsigned long *idx, int idx_size){
-  if(queue != NULL && queue->point.id == point_id){
-    memcpy(idx, queue->idx, idx_size*sizeof(unsigned long));
-    queue_node_t *tmp = queue;
-    queue = queue->next;
-    free(tmp->idx);
-    hpoint_fini(&tmp->point);
-    free(tmp);
-    return queue;
-  }else{
-    queue_node_t *iter = queue;
-    while(iter->next != NULL){
-      if(iter->next->point.id == point_id){
-        memcpy(idx, iter->next->idx, idx_size*sizeof(unsigned long));
-        queue_node_t *tmp = iter->next;
-        iter->next = iter->next->next;
-        free(tmp->idx);
-        hpoint_fini(&tmp->point);
-        free(tmp);
-        return queue;
-      }
-    }
   }
   return queue;
 }
