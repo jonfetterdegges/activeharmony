@@ -11,7 +11,8 @@
  * BANDIT_TRADEOFF    | Double     | 1.0     | Tradeoff between exploration and exploitation; higher means switch strategies more often
  */
 
-#define DEBUG 1
+#undef DEBUG
+//#define DEBUG 1
 #ifdef DEBUG
 #define dbg(x...) fprintf(stderr, x)
 #else
@@ -53,6 +54,7 @@ const char *errmsg = NULL;
 hpoint_t best;
 double best_perf;
 
+int *converged = NULL;
 hpoint_t *best_per_strategy = NULL;
 double *best_perf_per_strategy = NULL;
 
@@ -68,7 +70,7 @@ hcfg_info_t plugin_keyinfo[] = {
     { TRADEOFF_PARAM, "1.0",
       "Tradeoff between exploration and exploitation; "
       "higher means switch strategies more often." },
-    { NULL }
+    { NULL, NULL, NULL }
 };
 
 // have to keep MAX_NUM_STRATEGIES in sync with POINT_ID_MASK and POINT_ID_BITS;
@@ -100,7 +102,7 @@ int window_population;
 int window_next;
 int requests_outstanding;  // number of generate calls not yet analyzed
 
-// internal function declarations
+// forward function declarations
 int init_sliding_window(void);
 void free_strategies(void);
 void free_strat(strategy_t *strat);
@@ -108,6 +110,8 @@ int parse_strategies(const char *list);
 int translate_id_from_sub(int strategy_id, int point_id);
 int translate_id_to_sub(int point_id, int *strategy_id);
 int assign_scores(double *scores);
+int test_convergence(void);
+int clear_convergence(void);
 
 int strategy_init(hsignature_t *sig) {
   int retval;
@@ -155,12 +159,15 @@ int strategy_init(hsignature_t *sig) {
 
   best_per_strategy = (hpoint_t *) malloc(strat_count * sizeof(hpoint_t));
   best_perf_per_strategy = (double *) malloc(strat_count * sizeof(double));
+  converged = (int *) calloc(strat_count, sizeof(int));
   if (best_per_strategy == NULL
-      || best_perf_per_strategy == NULL) {
+      || best_perf_per_strategy == NULL
+      || converged == NULL) {
     session_error("Couldn't allocate memory for control structures.");
     free_strategies();
     free(best_per_strategy);
     free(best_perf_per_strategy);
+    free(converged);
     return -1;
   }
 
@@ -192,6 +199,9 @@ int strategy_init(hsignature_t *sig) {
       dbg("strategy %d, no init\n", i);
     }
   }
+
+  if (clear_convergence() < 0)
+    return -1;
 
   // TODO I have not handled restarts; need to understand that better.
 
@@ -354,6 +364,7 @@ int strategy_fini(void) {
   free(window);
   free(best_per_strategy);
   free(best_perf_per_strategy);
+  free(converged);
 
   return retval;
 }
@@ -368,8 +379,6 @@ void free_strategies(void) {
 
 // Nothing special to be done for join, setcfg; we just pass the
 // call to the sub-strategies.
-// TODO can I use setcfg to catch a sub-strategy setting the "converged"
-// flag?
 
 int strategy_join(const char *id) {
   int i;
@@ -385,12 +394,6 @@ int strategy_join(const char *id) {
 int strategy_setcfg(const char *key, const char *val) {
   int i;
   int retval = 0;
-
-  // TODO Intercept sub-strategy setcfg of the "converged" flag; decide
-  // on a convergence criterion, for instance, the strategy with the current
-  // global optimum thinks it's converged. (But I need a way to identify
-  // which strategy set the convergence flag; perhaps just test before and
-  // after, rather than doing it here?)
 
   for (i = 0; i < strat_count; i++) {
     if (strategies[i].setcfg)
@@ -445,23 +448,27 @@ int strategy_generate(hflow_t *flow, hpoint_t *point) {
       double best_score = -1.0;
       int i;
       for (i = 0; i < strat_count; i++)
-	if (scores[i] > best_score) {
+	if (!converged[i] && scores[i] > best_score) {
 	  best_score = scores[i];
 	  best_strategy = i;
 	}
       dbg("new best strategy is %d\n", best_strategy);
     }
     #ifdef DEBUG
-      buf = bbuf;
-      if (hpoint_serialize(&buf, &buflen, point) < 0)
-        return -1;
-      dbg("strategy %d generated %s\n", best_strategy, bbuf);
+      if (flow->status != HFLOW_WAIT) {
+        buf = bbuf;
+        if (hpoint_serialize(&buf, &buflen, point) < 0)
+          return -1;
+        dbg("strategy %d generated %s\n", best_strategy, bbuf);
+      }
     #endif
   } while (best_strategy >= 0 && flow->status == HFLOW_WAIT);
 
-  if (best_strategy < 0)
-    // all strategies want to wait, so we will.
+  if (best_strategy < 0) {
+    // all strategies want to wait (or have converged), so we will wait.
+    flow->status = HFLOW_WAIT;
     return 0;
+  }
 
   // best_strategy has generated a point. we modify the id so we can remember
   // who is responsible for it.
@@ -519,18 +526,24 @@ int assign_scores(double *scores) {
       auc[subtrial->strategy_id] += usage_counts[subtrial->strategy_id];
   }
   for (istrat = 0; istrat < strat_count; istrat++) {
-    // handle "unused" and "used but no results" separately
-    if (usage_counts[istrat] == 0) {
-      scores[istrat] = INFINITY;
+    if (converged[istrat]) {
+      // if it says it's converged, we'll prefer any other strategy
+      dbg("Strategy %d: converged\n", istrat);
+      scores[istrat] = 0.0;
     } else {
-      double nuses = (double) usage_counts[istrat];
-      double nresults = (double) result_counts[istrat];
-      if (nresults == 0.0)
-        nresults = 1.0;  // auc will be zero so the exploitation score is 0 anyway
-      scores[istrat] = 2.0 * auc[istrat] / nresults / (nresults + 1.0);
-      scores[istrat] += explore_factor / sqrt(nuses);
+      // handle "unused" and "used but no results" separately
+      if (usage_counts[istrat] == 0) {
+        scores[istrat] = HUGE_VAL;
+      } else {
+        double nuses = (double) usage_counts[istrat];
+        double nresults = (double) result_counts[istrat];
+        if (nresults == 0.0)
+          nresults = 1.0;  // auc will be zero so the exploitation score is 0 anyway
+        scores[istrat] = 2.0 * auc[istrat] / nresults / (nresults + 1.0);
+        scores[istrat] += explore_factor / sqrt(nuses);
+      }
+      dbg("Strategy %d: score %.3lf\n", istrat, scores[istrat]);
     }
-    dbg("Strategy %d: score %.3lf\n", istrat, scores[istrat]);
     if (scores[istrat] > best_score) {
       best_strategy = istrat;
       best_score = scores[istrat];
@@ -557,8 +570,23 @@ int strategy_rejected(hflow_t *flow, hpoint_t *point) {
   return result;
 }
 
+int test_convergence() {
+  char *cvg = hcfg_get(session_cfg, CFGKEY_CONVERGED);
+  return (cvg && cvg[0] == '1') ? 1 : 0;  // this is what the client tests
+}
+
+int clear_convergence() {
+  if (session_setcfg(CFGKEY_CONVERGED, "0") < 0) {
+    session_error("failed to unset convergence");
+    return -1;
+  }
+  return 0;
+}
+
 int strategy_analyze(htrial_t *trial) {
   int strategy_id, sub_point_id;
+  int converged_before, converged_after;
+
   sub_point_id = translate_id_to_sub(trial->point.id, &strategy_id);
   if (strategy_id < 0 || strategy_id >= MAX_NUM_STRATEGIES) {
     session_error("Invalid strategy ID in strategy_analyze.");
@@ -619,10 +647,37 @@ int strategy_analyze(htrial_t *trial) {
     return -1;
   }
   trial_clone.perf = trial->perf;  // pointer copy; any reason to clone?
+
+  converged_before = test_convergence();
+  if (converged_before) {
+    if (clear_convergence() < 0)
+      return -1;
+  }
   dbg("calling strategy %d analyze\n", strategy_id);
   int result = strategies[strategy_id].analyze(&trial_clone);
   if (result < 0)
     return -1;
+  converged_after = test_convergence();
+  if (converged_after) {
+    converged[strategy_id] = 1;
+    // we will keep the convergence flag if (1) it was set before, or (2) all
+    // the other strategies have also converged
+    int keep_convergence = converged_before;
+    if (!keep_convergence) {
+      // clear the convergence flag, unless everyone else is converged too
+      int i;
+      int all_converged = 1;
+      for (i = 0; i < strat_count; i++) {
+        all_converged = all_converged && converged[i];
+        if (!all_converged)
+          break;
+      }
+      keep_convergence = all_converged;
+    }
+    if (!keep_convergence)
+      if (clear_convergence() < 0)
+          return -1;
+  }
 
   // call "hint" for all others
   int i;

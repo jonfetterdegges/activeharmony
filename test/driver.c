@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #include <hclient.h>
 
@@ -40,25 +41,85 @@ float currTime() {
  *     This is possible with CPU time using getrusage().
  *
  * XXX is it too annoying to provide the full path?
- *
- * TODO get additional results from the child for multi-objective search
- *
- * TODO handle the case where the child fails
  */
-float runChild(char *path, char **argv) {
+#define BUFLEN 32
+int runChild(char *path, char **argv, float *time, int *precision, int do_read) {
+  int pipefd[2];
+  if (pipe(pipefd) < 0) {
+    perror("Error opening pipe");
+    return -1;
+  }
+  if (fcntl(pipefd[1], F_SETNOSIGPIPE, 1) < 0) {
+    perror("disabling SIGPIPE for child");
+    return -1;
+  }
+
   float starttime = currTime();
   pid_t childPid = fork();
+
   if (childPid) {
-    // parent
+    // first error check
+    if (childPid < 0) {
+      perror("Error forking child");
+      return -1;
+    }
+
+    // fork succeeded and we're in the parent process
+
+    // read precision from child stdout if do_read is true
+    int read_ret = 0;
+    char buf[BUFLEN];
+    if (do_read) {
+      read_ret = read(pipefd[0], buf, BUFLEN-1);
+      if (read_ret < 0) {
+        perror("Error reading precision from child");
+        return -1;
+      }
+    }
+
+    // now wait for the child to terminate
     waitpid(childPid, NULL, 0);
+
+    // timing
     float endtime = currTime();
-    return endtime - starttime;
+    *time = endtime - starttime;
+
+    // interpret precision we read earlier
+    if (read_ret == 0)
+      // this covers the case where do_read is false
+      *precision = 0;
+    else {
+      // assume the child wrote precision on the pipe
+      // no error checking since I'm running this with lots of different children
+      buf[read_ret] = '\0';
+      sscanf(buf, "%d", precision);
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+
+    return 0;
+
   } else {
-    // child
-    // TODO check return value
-    execv(path, argv);
+    // fork succeeded, this is the child process
+    int ret;
+
+    if (do_read) {
+      // redirect stdout to the write end of the pipe
+      ret = dup2(pipefd[1], 1);
+      if (ret < 0) {
+        perror("Error redirecting stdout");
+        return -1;
+      }
+    }
+
+    // exec the child
+    ret = execv(path, argv);
+    if (ret < 0) {
+      perror("Error starting child");
+    }
+    return -1;  // this implies we had ret < 0
   }
-  return -1; // should never get here
 }
 
 #define SOURCE "/Users/jonfetterdegges/Documents/classes/f15-714/projects/ah-clients/linpackc.c"
@@ -80,14 +141,28 @@ float compile(char *compiler, char *optflag, char *rollflag) {
   } else {
     args[7] = NULL;
   }
-  return runChild(compiler, args);
+
+  int precision;
+  float time;
+  int ret = runChild(compiler, args, &time, &precision, 0);
+  if (ret < 0)
+    return -1.0;
+  return time;
 }
 
 float run() {
   char *args[2];
   args[0] = TARGET;
   args[1] = NULL;
-  return runChild(TARGET, args);
+
+  int precision;
+  float time;
+  int ret;
+
+  ret = runChild(TARGET, args, &time, &precision, 0);
+  if (ret < 0)
+    exit(2);
+  return time;
 }
 
 void ah_die(char *message) {
@@ -170,7 +245,17 @@ int main(int argc, char **argv) {
   oldval = ah_set_cfg(desc, "BANDIT_STRATEGIES", "exhaustive.so:random.so:nm.so");
   if (oldval == NULL)
     ah_die_detail("ah_setcfg BANDIT_STRATEGIES failed", desc);
-  
+  if (ah_set_cfg(desc, "SA_TMAX", "3") == NULL)
+    ah_die_detail("ah_set_cfg SA_TMAX failed", desc);
+  if (ah_set_cfg(desc, "SA_TMIN", "0.02") == NULL)
+    ah_die_detail("ah_set_cfg SA_TMIN failed", desc);
+  if (ah_set_cfg(desc, "SA_NPOINTS", "2") == NULL)
+    ah_die_detail("ah_set_cfg SA_NPOINTS failed", desc);
+  if (ah_set_cfg(desc, "SA_TSTEPS", "100") == NULL)
+    ah_die_detail("ah_set_cfg SA_TSTEPS failed", desc);
+  if (ah_set_cfg(desc, "SA_RESET_STEPS", "10") == NULL)
+    ah_die_detail("ah_set_cfg SA_RESET_STEPS failed", desc);
+
 
   // start a Harmony session
   // the second and third args are host and port; when NULL/0, they tell the
@@ -195,8 +280,8 @@ int main(int argc, char **argv) {
     ah_die_detail("ah_join failed", desc);
 
   // dummy run because the first time always seems fastest
-  compile(COMPILER1, "-O1", ROLL1);
-  run();
+  // compile(COMPILER1, "-O1", ROLL1);
+  // run();
 
   int iters = 0;
   while (iters < MAX_LOOP && !ah_converged(desc)) {

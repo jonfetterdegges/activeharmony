@@ -1,13 +1,21 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "hpoint.h"
 #include "libgridpoint.h"
 #include "session-core.h"
+#include "hutil.h"
 
 struct lgp_info {
   hsignature_t sig;
-  long *max_indices;
+  long max_indices[];
 };
+
+// pasting HPOINT_INITIALIZER in here explicitly bc it's not a compile-time
+// constant. there must be a better way.
+const gridpoint_t GRIDPOINT_INITIALIZER = {{-1, 0, NULL, 0}, NULL};
+//const gridpoint_t GRIDPOINT_INITIALIZER = {HPOINT_INITIALIZER, NULL};
 
 // forward declarations
 int point_from_indices(struct lgp_info *info, gridpoint_t *gpt);
@@ -29,12 +37,9 @@ struct lgp_info *libgridpoint_init(hsignature_t *sig) {
     goto error;
   }
 
-  void *vinfo = (void *) info;
-  info->max_indices = (long *) (vinfo + sizeof(struct lgp_info));
-
   int i;
   for (i = 0; i < info->sig.range_len; i++) {
-    info->max_indices[i] = (int) hrange_max_idx(sig->range + i);
+    info->max_indices[i] = hrange_max_idx(sig->range + i);
   }
 
 
@@ -60,11 +65,14 @@ void libgridpoint_fini(struct lgp_info *info) {
 int gridpoint_init(struct lgp_info *info, gridpoint_t *gpt) {
   int result;
 
-  gpt->indices = (long *) calloc(info->sig.range_len, sizeof(long));
-  if (!gpt->indices)
-    return -1;
-
   gpt->point = HPOINT_INITIALIZER;
+
+  gpt->indices = (long *) calloc(info->sig.range_len, sizeof(long));
+  if (!gpt->indices) {
+    session_error("Couldn't allocate indices in gridpoint_init");
+    goto error;
+  }
+
   result = hpoint_init(&gpt->point, info->sig.range_len);
   if (result < 0) {
     session_error("Error in hpoint_init called from gridpoint_init");
@@ -87,11 +95,19 @@ void gridpoint_fini(gridpoint_t *gpt) {
 int gridpoint_rand(struct lgp_info *info, gridpoint_t *gpt) {
   int i;
   for (i = 0; i < info->sig.range_len; i++) {
-    gpt->indices[i] = (long) (drand48() * info->max_indices[i]);
+    gpt->indices[i] = (long) (drand48() * (info->max_indices[i]+1));
   }
   if (point_from_indices(info, gpt) < 0)
     return -1;
-  
+
+  return 0;
+}
+
+int gridpoint_copy(struct lgp_info *info,
+                   gridpoint_t *dest, gridpoint_t *src) {
+  if (hpoint_copy(&dest->point, &src->point) < 0)
+    return -1;
+  memcpy(dest->indices, src->indices, info->sig.range_len * sizeof(long));
   return 0;
 }
 
@@ -108,13 +124,13 @@ int gridpoint_from_hpoint(struct lgp_info *info,
     hrange_t *rng = info->sig.range + i;
     switch (rng->type) {
     case HVAL_INT:
-      result->indices[i] = hrange_int_index(&rng->bounds.i, hpoint->val->value.i);
+      result->indices[i] = hrange_int_index(&rng->bounds.i, hpoint->val[i].value.i);
       break;
     case HVAL_REAL:
-      result->indices[i] = hrange_real_index(&rng->bounds.r, hpoint->val->value.r);
+      result->indices[i] = hrange_real_index(&rng->bounds.r, hpoint->val[i].value.r);
       break;
     case HVAL_STR:
-      result->indices[i] = hrange_str_index(&rng->bounds.s, hpoint->val->value.s);
+      result->indices[i] = hrange_str_index(&rng->bounds.s, hpoint->val[i].value.s);
       break;
     default:
       session_error("bad range type in gridpoint_from_hpoint");
@@ -140,9 +156,9 @@ int gridpoint_move(struct lgp_info *info,
   long new_idx = origin->indices[dim] + steps;
   if (new_idx < 0)
     new_idx = 0;
-  if (new_idx >= info->max_indices[dim])
-    new_idx = info->max_indices[dim] - 1;
-  
+  if (new_idx > info->max_indices[dim])
+    new_idx = info->max_indices[dim];
+
   int steps_taken = (int) (new_idx - origin->indices[dim]);
   if (steps_taken < 0)
     steps_taken = -steps_taken;
@@ -171,10 +187,10 @@ int gridpoint_move_multi(struct lgp_info *info,
     long new_idx = origin->indices[idim] + steps[idim];
     if (new_idx < 0)
       new_idx = 0;
-    if (new_idx >= info->max_indices[idim])
-      new_idx = info->max_indices[idim] - 1;
+    if (new_idx > info->max_indices[idim])
+      new_idx = info->max_indices[idim];
     result->indices[idim] = new_idx;
-    
+
     int dsteps_taken = (int) (new_idx - origin->indices[idim]);
     if (dsteps_taken > 0)
       steps_taken += dsteps_taken;
@@ -194,24 +210,74 @@ int point_from_indices(struct lgp_info *info, gridpoint_t *gpt) {
   int i;
   for (i = 0; i < info->sig.range_len; i++) {
     hrange_t *rng = info->sig.range + i;
+    hval_t *val = gpt->point.val + i;
+    val->type = rng->type;
     switch (rng->type) {
     case HVAL_INT:
-      gpt->point.val->value.i = hrange_int_value(&rng->bounds.i, gpt->indices[i]);
+      val->value.i = hrange_int_value(&rng->bounds.i, gpt->indices[i]);
       break;
     case HVAL_REAL:
-      gpt->point.val->value.r = hrange_real_value(&rng->bounds.r, gpt->indices[i]);
+      val->value.r = hrange_real_value(&rng->bounds.r, gpt->indices[i]);
       break;
     case HVAL_STR:
       if (gpt->point.memlevel)
-        free((char *)gpt->point.val->value.s); // cast silences const warning
-      gpt->point.val->value.s = hrange_str_value(&rng->bounds.s, gpt->indices[i]);
+        free((char *)gpt->point.val[i].value.s); // cast silences const warning
+      val->value.s = stralloc(hrange_str_value(&rng->bounds.s,
+                                               gpt->indices[i]));
       break;
     default:
       session_error("bad range type in point_from_indices");
       return -1;
     }
   }
-  gpt->point.memlevel = 0;
+  gpt->point.memlevel = 1;
+
   return 0;
 }
 
+#define PFX "gp: "
+int printable_gridpoint(struct lgp_info *info, char *buf, int buflen, gridpoint_t *gpt) {
+  int idim;
+  char *pos = buf;
+  int remain = buflen;
+  int printed;
+
+  if (buflen < (int) (strlen(PFX)+1)) {
+    *buf = '\0';
+    return 0;
+  }
+  pos = stpcpy(buf, PFX);
+  remain = buflen - (pos - buf);
+  for (idim = 0; idim < info->sig.range_len; idim++) {
+    printed = snprintf(pos, remain, "%ld", gpt->indices[idim]);
+    remain -= printed;
+    pos += printed;
+    if (remain <= 0)
+      break;
+    hval_t *val = &gpt->point.val[idim];
+    switch (val->type) {
+    case HVAL_INT:
+      printed = snprintf(pos, remain, " (%ld), ", val->value.i);
+      break;
+    case HVAL_REAL:
+      printed = snprintf(pos, remain, " (%la), ", val->value.r);
+      break;
+    case HVAL_STR:
+      printed = snprintf(pos, remain, " (%s), ", val->value.s);
+      break;
+    default:
+      printed = snprintf(pos, remain, " (unk), ");
+      break;
+    }
+    remain -= printed;
+    pos += printed;
+    if (remain <= 0)
+      break;
+  }
+
+  if (remain > 0)
+    // cut off the trailing ", "
+    buf[buflen-remain-2] = '\0';
+
+  return 0;
+}
