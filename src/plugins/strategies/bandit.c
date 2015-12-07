@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 
 typedef struct strategy {
   char *name;
@@ -102,6 +103,9 @@ int window_population;
 int window_next;
 int requests_outstanding;  // number of generate calls not yet analyzed
 
+FILE *logfile = NULL;
+long log_seq_num = 0;
+
 // forward function declarations
 int init_sliding_window(void);
 void free_strategies(void);
@@ -120,6 +124,17 @@ int strategy_init(hsignature_t *sig) {
 
   best = HPOINT_INITIALIZER;
   best_perf = INFINITY;
+
+  char logfile_name[256];
+  snprintf(logfile_name, 256, "bandit_%d.log", getpid());
+  logfile = fopen(logfile_name, "a");
+  if (logfile) {
+    fprintf(logfile, "# Multi-Armed Bandit log file\n");
+    fprintf(logfile, "# %12s %12s %12s # %-12s\n",
+            "Sequence #", "Strategy #", "Performance", "Point");
+  } else {
+    fprintf(stderr, "Failed to open bandit logfile %s, continuing.\n", logfile_name);
+  }
 
   // Load constants for sliding window and tradeoff constant
   window_size = hcfg_int(session_cfg, WINDOW_SIZE_PARAM);
@@ -365,6 +380,11 @@ int strategy_fini(void) {
   free(best_per_strategy);
   free(best_perf_per_strategy);
   free(converged);
+
+  if (logfile) {
+    fprintf(logfile, "# Terminating run\n");
+    fclose(logfile);
+  }
 
   return retval;
 }
@@ -612,18 +632,31 @@ int strategy_analyze(htrial_t *trial) {
 
   // track global optimum
   // TODO use hperf_cmp to make this suitable for multi-objective search
-  if (hperf_unify(trial->perf) < best_perf) {
+  double perf = hperf_unify(trial->perf);
+  if (perf < best_perf) {
     if (hpoint_copy(&best, &trial->point) < 0) {
       session_error("failed to copy new global optimum");
       return -1;
     }
     dbg("new global best\n");
-    best_perf = hperf_unify(trial->perf);
+    best_perf = perf;
     window[window_entry].new_best = 1;
   }
 
   // decrement count of outstanding generates
   requests_outstanding--;
+
+  // log the result
+  if (logfile) {
+    log_seq_num++;
+    int ptbufsize = 128;
+    char *ptbuf = malloc(ptbufsize * sizeof(char));
+    char *optbuf = ptbuf;
+    hpoint_serialize(&ptbuf, &ptbufsize, &trial->point);
+    fprintf(logfile, "  %12ld %12d %12g # %s\n", log_seq_num, strategy_id, perf, optbuf);
+    fflush(logfile);
+    free(optbuf);
+  }
 
   // now pass the result to the sub-strategies
 
