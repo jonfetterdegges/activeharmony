@@ -24,8 +24,6 @@ pqueue_node_t *pqueue_beam_next_to_expand(pqueue_node_t *queue);
 
 pqueue_node_t *pqueue_push(pqueue_node_t *queue, const hpoint_t* point, double perf, unsigned long *idx, int idx_size, int expanded);
 
-int pqueue_contains(pqueue_node_t *queue, unsigned long *idx, int idx_size);
-
 void print_pqueue(pqueue_node_t *queue);
 /*
 	Fifo queue

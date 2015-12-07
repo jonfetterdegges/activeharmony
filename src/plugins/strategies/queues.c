@@ -81,18 +81,6 @@ pqueue_node_t *pqueue_beam_next_to_expand(pqueue_node_t *queue){
   return iter;
 }
 
-int pqueue_contains(pqueue_node_t *queue, unsigned long *idx, int idx_size){
-  pqueue_node_t *iter = queue;
-  while(iter != NULL){
-    if(memcmp(iter->idx, idx, idx_size*sizeof(unsigned long)) == 0){
-      return 0;
-    }else{
-      iter = iter->next;
-    }
-  }
-  return -1;
-}
-
 pqueue_node_t *pqueue_push(pqueue_node_t *queue, const hpoint_t* point, double perf, unsigned long *idx, int idx_size, int expanded){
   pqueue_node_t *new_node = (pqueue_node_t *)malloc(sizeof(pqueue_node_t));
   new_node->point = HPOINT_INITIALIZER;
