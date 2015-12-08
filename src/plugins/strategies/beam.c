@@ -43,7 +43,7 @@
 #include <math.h>
 
 
-#define _width_ 5
+#define _width_ 10
 #define _depth_ 17
 
 /*
@@ -391,7 +391,7 @@ int get_next_point(void){
 void infer_indices(const hpoint_t *point, unsigned long *indices){
   // infer indices
   for (int i = 0; i < N; i++) {
-    fprintf(stderr, "%d\n", i);
+    // fprintf(stderr, "%d\n", i);
     switch (range[i].type) {
     case HVAL_INT:
       indices[i] = hrange_int_index(&range[i].bounds.i, point->val[i].value.i);
@@ -426,7 +426,7 @@ int generate_all_successors(pqueue_node_t *node_to_expand)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.i += range[i].bounds.i.step;
 				node_to_expand->idx[i]++;
-				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) == 0){
 					queue_head = queue_push_back(queue_head,
 												               &new_point,
 												               node_to_expand->idx, N);
@@ -444,7 +444,7 @@ int generate_all_successors(pqueue_node_t *node_to_expand)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.i -= range[i].bounds.i.step;
 				node_to_expand->idx[i]--;
-				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) == 0){
 					queue_head = queue_push_back(queue_head,
                                        &new_point,
                                        node_to_expand->idx,
@@ -474,7 +474,7 @@ int generate_all_successors(pqueue_node_t *node_to_expand)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.r = next_r;
 				node_to_expand->idx[i]++;
-				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) == 0){
 					queue_head = queue_push_back(queue_head,
                                        &new_point,
                                        node_to_expand->idx,
@@ -493,7 +493,7 @@ int generate_all_successors(pqueue_node_t *node_to_expand)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.r = prev_r;
 				node_to_expand->idx[i]--;
-				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) == 0){
 					queue_head = queue_push_back(queue_head,
                                        &new_point,
                                        node_to_expand->idx,
@@ -512,7 +512,7 @@ int generate_all_successors(pqueue_node_t *node_to_expand)
 				new_point.val[i].value.s =
                     range[i].bounds.s.set[node_to_expand->idx[i] + 1];
 				node_to_expand->idx[i] += 1;
-				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) == 0){
 					queue_head = queue_push_back(queue_head,
                                        &new_point,
                                        node_to_expand->idx,
@@ -529,7 +529,7 @@ int generate_all_successors(pqueue_node_t *node_to_expand)
 				new_point.val[i].value.s = 
                     range[i].bounds.s.set[node_to_expand->idx[i] - 1];
 				node_to_expand->idx[i] -= 1;
-				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) != 0){
+				if(vqueue_contains(vqueue_head, node_to_expand->idx, N) == 0){
 					queue_head = queue_push_back(queue_head,
                                        &new_point,
                                        node_to_expand->idx,
