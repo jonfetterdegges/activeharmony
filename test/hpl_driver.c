@@ -380,7 +380,7 @@ int main(int argc, char **argv) {
     ah_die_detail("ah_join failed", desc);
 
   printf("Tuning start\n");
-  printf("%3s %4s %3s %4s %2s %2s %5s %4s %2s %2s %8s\n",
+  printf("%3s %4s %4s %4s %2s %2s %5s %4s %2s %2s %8s\n",
          "id", "size", "nb", "grid", "pf", "rf", "nbmin", "ndiv", "dp", "xp", "result");
   char *grid_printable[] = {"4x1", "2x2", "1x4"};
   char *pfact_printable[] = {"l", "c", "r"};
@@ -399,11 +399,13 @@ int main(int argc, char **argv) {
     // run with current parameters
     nb = 1 << nb_exp;
     nbmin = 1 << nbmin_exp;
+    printf("%3d %4ld %4d %4s %2s %2s %5d %4ld %2ld %2ld",
+           iters, size, nb, grid_printable[grid], pfact_printable[pfact],
+           pfact_printable[rfact], nbmin, ndiv, depth, xpose);
+    fflush(stdout);
     double result = run_hpl(iters, size, nb, grid, pfact,
                             rfact, nbmin, ndiv, depth, xpose);
-    printf("%3d %4ld %3d %4s %2s %2s %5d %4ld %2ld %2ld %8.2f\n",
-           iters, size, nb, grid_printable[grid], pfact_printable[pfact],
-           pfact_printable[rfact], nbmin, ndiv, depth, xpose, result);
+    printf(" %8.2f\n", result);
     if (result < 0.0) {
       fprintf(stderr, "***Bad result, quitting\n");
     }
