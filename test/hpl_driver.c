@@ -219,7 +219,7 @@ float run_hpl(int id, int size, int nb, enum grid grid, enum pfact pfact,
 
   // now run HPL
   char *argv[] = {"mpirun", "-np", "4", "xhpl", NULL};
-  if (runChild("/opt/local/bin/mpirun", argv) < 0)
+  if (runChild("/usr/local/bin/mpirun", argv) < 0)
     return -1.0;
 
   // HPL has run, read its output file
@@ -414,8 +414,8 @@ int main(int argc, char **argv) {
   }
 
   fprintf(stderr, "convergence %s in %d iteration%s\n",
-	  ah_converged(desc) ? "success" : "failure",
-	  iters, iters == 1 ? "" : "s");
+    ah_converged(desc) ? "success" : "failure",
+    iters, iters == 1 ? "" : "s");
 
   if (ah_best(desc) >= 0) {
     nb = 1 << nb_exp;
@@ -431,7 +431,7 @@ int main(int argc, char **argv) {
   // Leave the tuning session
   if (ah_leave(desc))
     ah_die("you can ah_checkout any time you want "
-	   "but you can never ah_leave");
+     "but you can never ah_leave");
 
   // Terminate Harmony connection.
   ah_fini(desc);
