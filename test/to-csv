@@ -1,0 +1,29 @@
+#!/bin/bash
+
+
+# Handles the Bandit log files (beginning with "# Multi-Armed Bandit
+# log file") fine, but you have to clean up the top and bottom of the
+# other log files (beginning with "Tuning start") manually.
+
+
+if [ -z "$1" ]; then
+  echo "Usage: to-csv file"
+  exit 1
+fi
+
+file="$1"
+
+nocomment="$(grep -v '^#' $file)"
+trimmed="$(awk '{ gsub(/^[ \t]+|[ \t]+$/, ""); print }' <<< "$nocomment")"
+csv="$(awk -F'( )*(# hpoint:|hval:INT)?( )*' -v OFS=',' '{$1=$1 ; print}' <<< "$trimmed")"
+first="$(head -n 1 <<< "$csv")"
+count="$(tr -cd , <<< "$first" | wc -c)"
+params=$(($count-3))
+
+header="sequence,strategy,y"
+for i in `seq 0 $params`; do
+  header="$header,x$i"
+done
+
+echo "$header"
+echo "$csv"

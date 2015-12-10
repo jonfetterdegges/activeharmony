@@ -49,10 +49,11 @@ int runChild(char *path, char **argv, float *time, int *precision, int do_read) 
     perror("Error opening pipe");
     return -1;
   }
+  /* Only OSX
   if (fcntl(pipefd[1], F_SETNOSIGPIPE, 1) < 0) {
     perror("disabling SIGPIPE for child");
     return -1;
-  }
+  }*/
 
   float starttime = currTime();
   pid_t childPid = fork();
@@ -122,8 +123,8 @@ int runChild(char *path, char **argv, float *time, int *precision, int do_read) 
   }
 }
 
-#define SOURCE "/Users/jonfetterdegges/Documents/classes/f15-714/projects/ah-clients/linpackc.c"
-#define TARGET "/Users/jonfetterdegges/Documents/classes/f15-714/projects/ah-clients/linpackc"
+#define SOURCE "linpackc.c"
+#define TARGET "linpackc"
 
 float compile(char *compiler, char *optflag, char *rollflag) {
   char *args[9];
