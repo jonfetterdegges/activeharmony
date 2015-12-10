@@ -159,7 +159,7 @@ float run_hpl(int id, int size, int nb, enum grid grid, enum pfact pfact,
 
   // line 3: output file name (not used right now)
   char outname[VAL_BUFLEN];
-  snprintf(outname, VAL_BUFLEN, "r%d", id);
+  snprintf(outname, VAL_BUFLEN, "r/%d", id);
   set_input(input, 3, outname);
 
   // line 6: problem size
@@ -219,7 +219,7 @@ float run_hpl(int id, int size, int nb, enum grid grid, enum pfact pfact,
 
   // now run HPL
   char *argv[] = {"mpirun", "-np", "4", "xhpl", NULL};
-  if (runChild("/opt/local/bin/mpirun", argv) < 0)
+  if (runChild("/usr/local/bin/mpirun", argv) < 0)
     return -1.0;
 
   // HPL has run, read its output file
@@ -280,8 +280,8 @@ int main(int argc, char **argv) {
     ah_die("ah_args returned negative");
 
   char name[1024];
-  if (argc > 1)
-    strncpy(name, argv[1], sizeof(name));
+  if (argc > 2)
+    strncpy(name, argv[2], sizeof(name));
   else
     snprintf(name, sizeof(name), "hpl.%d", getpid());
 
@@ -312,9 +312,16 @@ int main(int argc, char **argv) {
   // note when reading AH examples: harmony_strategy and harmony_layer_list
   // are just front ends to harmony_setcfg with particular config keys;
   // the examples in the AH repo call harmony_setcfg instead
-  if (ah_strategy(desc, "bandit.so"))
+  char strategy[64];
+  if (argc <= 1)
+    strcpy(strategy, "bandit.so");
+  else {
+    strncpy(strategy, argv[1], 63);
+    strategy[63] = '\0';
+  }
+  if (ah_strategy(desc, strategy))
     ah_die("ah_strategy failed");
-  if (ah_layers(desc, "agg.so:log.so"))
+  if (ah_layers(desc, "log.so:agg.so"))
     ah_die("ah_layers failed");
 
   char *oldval;
@@ -327,9 +334,11 @@ int main(int argc, char **argv) {
   oldval = ah_set_cfg(desc, "LOG_FILE", "hpl-driver.log");
   if (oldval == NULL)
     ah_die_detail("ah_setcfg LOG_FILE failed", desc);
-  oldval = ah_set_cfg(desc, "BANDIT_STRATEGIES", "random.so:sim_anneal.so:beam.so");
+  oldval = ah_set_cfg(desc, "BANDIT_STRATEGIES", "sim_anneal.so:beam.so:nm.so");
   if (oldval == NULL)
     ah_die_detail("ah_setcfg BANDIT_STRATEGIES failed", desc);
+  if (ah_set_cfg(desc, "BANDIT_WINDOW_SIZE", "64") == NULL)
+    ah_die_detail("ah_set_cfg BANDIT_WINDOW_SIZE failed", desc);
   if (ah_set_cfg(desc, "SA_TMAX", "8") == NULL)
     ah_die_detail("ah_set_cfg SA_TMAX failed", desc);
   if (ah_set_cfg(desc, "SA_TMIN", "0.1") == NULL)
@@ -414,8 +423,8 @@ int main(int argc, char **argv) {
   }
 
   fprintf(stderr, "convergence %s in %d iteration%s\n",
-	  ah_converged(desc) ? "success" : "failure",
-	  iters, iters == 1 ? "" : "s");
+    ah_converged(desc) ? "success" : "failure",
+    iters, iters == 1 ? "" : "s");
 
   if (ah_best(desc) >= 0) {
     nb = 1 << nb_exp;
@@ -431,7 +440,7 @@ int main(int argc, char **argv) {
   // Leave the tuning session
   if (ah_leave(desc))
     ah_die("you can ah_checkout any time you want "
-	   "but you can never ah_leave");
+     "but you can never ah_leave");
 
   // Terminate Harmony connection.
   ah_fini(desc);

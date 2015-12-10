@@ -27,7 +27,7 @@
 #include "hclient.h"
 #include "defaults.h"
 
-#define MAX_LOOP 5000
+#define MAX_LOOP 1000
 
 const char* fruits[] = {"apples",
                         "bananas",
@@ -82,7 +82,7 @@ int main(int argc, char* argv[])
     }
 
     /* Define a tuning variable that resides in the real domain. */
-    if (ah_real(hd, "r_var", 0.0001, 1.0, 0.0001) != 0) {
+    if (ah_real(hd, "r_var", 0.0001, 1.0, 0.01) != 0) {
         fprintf(stderr, "Error defining a real tuning variable");
         goto error;
     }

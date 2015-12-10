@@ -39,6 +39,7 @@ typedef struct hpoint {
 } hpoint_t;
 
 extern const hpoint_t HPOINT_INITIALIZER;
+extern const hpoint_t HPOINT_EMPTY;
 
 int  hpoint_init(hpoint_t* pt, int n);
 void hpoint_fini(hpoint_t* pt);

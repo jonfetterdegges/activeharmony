@@ -174,10 +174,10 @@ int vqueue_contains(visited_node_t *queue, unsigned long *idx, int idx_size){
   visited_node_t *iter = queue;
   while(iter != NULL){
     if(memcmp(iter->idx, idx, idx_size*sizeof(unsigned long)) == 0){
-      return 0;
+      return 1;
     }else{
       iter = iter->next;
     }
   }
-  return -1;
+  return 0;
 }

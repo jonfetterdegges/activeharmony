@@ -1550,6 +1550,7 @@ int write_values(hdesc_t* hd, const hpoint_t* pt)
     int i;
 
     if (hd->sess.sig.range_len != pt->n) {
+        fprintf(stderr, "%d %d %d\n", hd->sess.sig.range_len, pt->n, pt->id);
         hd->errstr = "Invalid internal point structure";
         return -1;
     }

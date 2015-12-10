@@ -367,7 +367,7 @@ int generate_all_successors(void)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.i += range[i].bounds.i.step;
 				curr.idx[i]++;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
+				if(vqueue_contains(vqueue_head, curr.idx, N) == 0){
 					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
 					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
 				}
@@ -381,7 +381,7 @@ int generate_all_successors(void)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.i -= range[i].bounds.i.step;
 				curr.idx[i]--;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
+				if(vqueue_contains(vqueue_head, curr.idx, N) == 0){
 					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
 					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
 				}
@@ -406,7 +406,7 @@ int generate_all_successors(void)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.r = next_r;
 				curr.idx[i]++;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
+				if(vqueue_contains(vqueue_head, curr.idx, N) == 0){
 					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
 					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
 				}
@@ -422,7 +422,7 @@ int generate_all_successors(void)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.r = prev_r;
 				curr.idx[i]--;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
+				if(vqueue_contains(vqueue_head, curr.idx, N) == 0){
 					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
 					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
 				}
@@ -437,7 +437,7 @@ int generate_all_successors(void)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.s = range[i].bounds.s.set[curr.idx[i] + 1];
 				curr.idx[i] += 1;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
+				if(vqueue_contains(vqueue_head, curr.idx, N) == 0){
 					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
 					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
 				}
@@ -450,7 +450,7 @@ int generate_all_successors(void)
 				new_point.id = ++global_point_id;
 				new_point.val[i].value.s = range[i].bounds.s.set[curr.idx[i] - 1];
 				curr.idx[i] -= 1;
-				if(vqueue_contains(vqueue_head, curr.idx, N) != 0){
+				if(vqueue_contains(vqueue_head, curr.idx, N) == 0){
 					queue_head = queue_push_back(queue_head, &new_point, curr.idx, N);
 					vqueue_head = vqueue_push_back(vqueue_head, curr.idx, N);
 				}
