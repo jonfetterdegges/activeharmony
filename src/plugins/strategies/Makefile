@@ -15,7 +15,8 @@ SRCS=angel.c \
      beam.c \
      queues.c \
      libgridpoint.c \
-     sim_anneal.c
+     sim_anneal.c \
+     diff_evo.c
 
 LIBEXEC_TGTS=angel.so \
              exhaustive.so \
@@ -25,7 +26,8 @@ LIBEXEC_TGTS=angel.so \
              bandit.so \
              beam.so \
              sim_anneal.so \
-             breadth_first.so
+             breadth_first.so \
+             diff_evo.so
 
 angel.so: REQ_LDLIBS+=-lm
 angel.so: libvertex.o
@@ -39,8 +41,11 @@ nm.so: libvertex.o
 pro.so: REQ_LDLIBS+=-lm
 pro.so: libvertex.o
 
+diff_evo.so: REQ_LDLIBS+=-lm
+diff_evo.so: libvertex.o libgridpoint.o
+
 random.so: REQ_LDLIBS+=-lm
-random.so: libvertex.o
+random.so: libvertex.o libgridpoint.o	
 
 breadth_first.so: REQ_LDLIBS+=-lm
 breadth_first.so: libvertex.o queues.o
