@@ -159,7 +159,7 @@ float run_hpl(int id, int size, int nb, enum grid grid, enum pfact pfact,
 
   // line 3: output file name (not used right now)
   char outname[VAL_BUFLEN];
-  snprintf(outname, VAL_BUFLEN, "r/%d", id);
+  snprintf(outname, VAL_BUFLEN, "r%d", id);
   set_input(input, 3, outname);
 
   // line 6: problem size
@@ -334,7 +334,7 @@ int main(int argc, char **argv) {
   oldval = ah_set_cfg(desc, "LOG_FILE", "hpl-driver.log");
   if (oldval == NULL)
     ah_die_detail("ah_setcfg LOG_FILE failed", desc);
-  oldval = ah_set_cfg(desc, "BANDIT_STRATEGIES", "sim_anneal.so:beam.so:nm.so");
+  oldval = ah_set_cfg(desc, "BANDIT_STRATEGIES", "sim_anneal.so:beam.so:nm.so:diff_evo.so");
   if (oldval == NULL)
     ah_die_detail("ah_setcfg BANDIT_STRATEGIES failed", desc);
   if (ah_set_cfg(desc, "BANDIT_WINDOW_SIZE", "64") == NULL)
